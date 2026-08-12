@@ -60,7 +60,7 @@ function fixedRecord() {
     verdict: "VERIFIED" as const,
     observedDayUtc: "2026-08-12",
     subject,
-    assertions: [{ id: "request-shape", required: true, passed: true }],
+    assertions: [{ id: "method", required: true, passed: true }],
   };
   return { recordId: publicEvidenceId("record", withoutRecordId), ...withoutRecordId };
 }
@@ -82,13 +82,13 @@ describe("CL-10 public wire contract", () => {
     expect(bundle.publisher.publicKey).toBe(FIXED_PUBLIC_KEY);
     expect(bundle.publisher.keyId).toBe("4d5a347afcc7a1ac8d2dd4e573f0fbca2d2e90dd472c35df5c72bf2d2afca08f");
     expect(bundle.records[0]!.subjectId).toBe("982a06b98a218df5ed68ae88f5f203e1911a3e875343c6ed8d5d0b74ff4c2b25");
-    expect(bundle.records[0]!.recordId).toBe("cae04cc6cfabfd14799cf8bcbcb07563f71de1d570360d87a5e9825eedc59536");
-    expect(bundle.bundleId).toBe("e416ec065b0bbefb14455b595ef7f53506a4fb005bea88976e96fbb97b473a7c");
-    expect(bundle.bundleDigest).toBe("1340b6382a2e47155f72a396bb7ad7be5f4c818c9e87d825cfe64a74766a3bde");
+    expect(bundle.records[0]!.recordId).toBe("b7afc1cfd18a7d6558cbdeb78ff1b14c4c9468f0163337e0aa3c48e0a32ca688");
+    expect(bundle.bundleId).toBe("9eedc731f4a944e1fe1c1494d9a829cd4ee7df1537e9e5111430a8ac4523a1b7");
+    expect(bundle.bundleDigest).toBe("5c5805485b29f4fb25c8c5c8d8c38afcd392e70d52f587183a0cf7c28d890e59");
     expect(bundle.signature).toEqual({
       algorithm: "ed25519",
-      signedDigest: "1340b6382a2e47155f72a396bb7ad7be5f4c818c9e87d825cfe64a74766a3bde",
-      signature: "+yZ96y77clEOz5vajcSV7/P/Mjg+V9evhNDIt5alrskUEa5+8aW/vkKqrDnrr7MGKJyYqAlIWvRS7RizbxS5Ag==",
+      signedDigest: "5c5805485b29f4fb25c8c5c8d8c38afcd392e70d52f587183a0cf7c28d890e59",
+      signature: "GYc+OouW1X0QeFgSaT6GEBF2DDFvFzz3N73O9SUmgmZsC4TW25N+FzTccfqHcqMRHt2HYuydvtFBwl8zTJx4Ag==",
     });
     expect(verifyPublicEvidenceBundle(bundle)).toEqual({ status: "cryptographically_valid" });
   });
