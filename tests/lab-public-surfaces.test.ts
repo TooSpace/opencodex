@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLabCommand } from "../src/cli/lab";
 import {
-  labPublicExportsDir,
+  labExportDir,
   labPublicPublisherKeyPath,
   persistConformanceResult,
   rebuildLabProjection,
@@ -144,7 +144,7 @@ describe("CL-10 CLI local public evidence", () => {
       expect(body.bundle).not.toHaveProperty("publisher");
       expect(body.excluded).toEqual([]);
       expect(existsSync(labPublicPublisherKeyPath(home))).toBe(false);
-      expect(existsSync(labPublicExportsDir(home)) ? readdirSync(labPublicExportsDir(home)) : []).toEqual([]);
+      expect(existsSync(labExportDir(home)) ? readdirSync(labExportDir(home)) : []).toEqual([]);
       expect(result.stdout).not.toContain("PRIVATE-CANARY");
     } finally {
       restoreFetch();
