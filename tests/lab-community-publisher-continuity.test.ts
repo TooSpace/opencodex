@@ -67,7 +67,7 @@ function observation(): ObservationEvent {
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
-    assertions: [{ id: "request-shape", operator: "equals", required: true, passed: true }],
+    assertions: [{ id: "method", operator: "equals", required: true, passed: true }],
     environment: {},
     artifactRefs: [],
   }) as ObservationEvent;
