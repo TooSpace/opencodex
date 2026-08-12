@@ -14,12 +14,16 @@ import {
   type ProtocolSubjectV1,
 } from "../src/lab";
 import {
+  buildPublicEvidenceBundle,
   createPublicEvidenceRevocation,
+  getOrCreatePublicPublisher,
   importCommunityEvidenceBundle,
   importCommunityEvidenceRevocation,
   listCommunityEvidence,
   projectPublicEvidence,
+  publicEvidenceId,
   signPublicEvidenceBundle,
+  signPublicPublisherDigest,
   verifyPublicEvidenceRevocation,
   writePublicEvidenceBundle,
 } from "../src/lab/public";
@@ -50,6 +54,7 @@ function protocolObservation(scenarioId = "responses-core.protocol.request-shape
     surface: "responses-http",
     behaviorFingerprint: hex("PRIVATE-community-behavior"),
   };
+  const assertionId = scenarioId === "responses-core.protocol.sse-framing" ? "events" : "method";
   return assignEventId({
     schemaVersion: LAB_EVENT_SCHEMA_VERSION,
     eventKind: "observation" as const,
@@ -72,7 +77,7 @@ function protocolObservation(scenarioId = "responses-core.protocol.request-shape
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
-    assertions: [{ id: "request-shape", operator: "equals", required: true, passed: true }],
+    assertions: [{ id: assertionId, operator: "equals", required: true, passed: true }],
     environment: {},
     artifactRefs: [],
   }) as ObservationEvent;
@@ -89,6 +94,32 @@ function signedBundle(config: string, scenarioId?: string) {
     createdDayUtc: projected.bundle.createdDayUtc,
     configDir: config,
   });
+}
+
+function signedUnreviewedScenarioBundle(config: string) {
+  const projected = projectPublicEvidence({
+    records: [{ observation: protocolObservation(), verdict: "VERIFIED" }],
+  });
+  const baseRecord = projected.bundle.records[0];
+  if (!baseRecord) throw new Error("expected reviewed source record");
+  const { recordId: _recordId, ...baseFields } = baseRecord;
+  const withoutRecordId = { ...baseFields, scenarioId: "private.unknown.scenario" };
+  const record = { recordId: publicEvidenceId("record", withoutRecordId), ...withoutRecordId };
+  const handle = getOrCreatePublicPublisher(config);
+  const unsigned = buildPublicEvidenceBundle({
+    records: [record],
+    artifacts: [],
+    createdDayUtc: projected.bundle.createdDayUtc,
+    publisher: handle.publisher,
+  });
+  return {
+    ...unsigned,
+    signature: {
+      algorithm: "ed25519" as const,
+      signedDigest: unsigned.bundleDigest,
+      signature: signPublicPublisherDigest(handle, unsigned.bundleDigest),
+    },
+  };
 }
 
 describe("CL-10 community quarantine", () => {
@@ -112,7 +143,7 @@ describe("CL-10 community quarantine", () => {
   test("rejects cryptographically valid but unknown scenario authority", () => {
     const publisherDir = configDir("ocx-cl10-publisher-");
     const consumerDir = configDir("ocx-cl10-consumer-");
-    const bundle = signedBundle(publisherDir, "private.unknown.scenario");
+    const bundle = signedUnreviewedScenarioBundle(publisherDir);
     expect(() => importCommunityEvidenceBundle(bundle, consumerDir)).toThrow(/authority/i);
     expect(listCommunityEvidence(consumerDir)).toEqual([]);
   });
