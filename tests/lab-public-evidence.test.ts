@@ -88,7 +88,7 @@ function protocolObservation(completedAt = DEFAULT_COMPLETED_AT): ObservationEve
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
     assertions: [{
-      id: "request-shape",
+      id: "method",
       operator: "equals",
       required: true,
       passed: true,
@@ -173,7 +173,7 @@ describe("CL-10 public projection", () => {
     expect(result.record.subjectId).toMatch(/^[0-9a-f]{64}$/);
     expect(result.record.subjectId).not.toBe(event.subjectId);
     expect(result.record.recordId).toMatch(/^[0-9a-f]{64}$/);
-    expect(result.record.assertions).toEqual([{ id: "request-shape", required: true, passed: true }]);
+    expect(result.record.assertions).toEqual([{ id: "method", required: true, passed: true }]);
 
     const serialized = JSON.stringify(result.record);
     for (const canary of [
