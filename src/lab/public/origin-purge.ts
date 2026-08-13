@@ -23,12 +23,14 @@ export function listValidPublicOriginsForPurge(configDir?: string): PurgeOriginI
   ensureLabDirs(configDir);
   const dir = labPublicOriginDir(configDir);
   cleanupStalePrivateFileStagesInDir(dir);
-  const names = readdirSync(dir).filter((name) => !isPrivateFileStageName(name)).sort();
+  const names = readdirSync(dir)
+    .filter((name) => !isPrivateFileStageName(name) && ORIGIN_RE.test(name))
+    .sort()
+    .slice(0, MAX_ORIGINS);
   const identities: PurgeOriginIdentity[] = [];
 
-  for (const name of names.slice(0, MAX_ORIGINS)) {
-    const match = ORIGIN_RE.exec(name);
-    if (!match) continue;
+  for (const name of names) {
+    const match = ORIGIN_RE.exec(name)!;
     const expected = { publisherKeyId: match[1]!, bundleId: match[2]! };
     try {
       const raw = parseStrictPublicJson(
