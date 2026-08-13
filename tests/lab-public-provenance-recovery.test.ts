@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { labPublicOriginDir } from "../src/lab/paths";
 import {
+  createPublicEvidenceRevocation,
   importCommunityEvidenceBundle,
   listCommunityEvidence,
   listLocalPublicOrigins,
@@ -141,4 +142,21 @@ test("origin and community persistence recover after same-process parent-directo
   expect(() => importCommunityEvidenceBundle(bundle, home)).toThrow();
   setPrivateFileCommitFaultForTests(null);
   expect(importCommunityEvidenceBundle(bundle, home)).toMatchObject({ created: false, bundleId: bundle.bundleId });
+});
+
+test("V1 revocations are bounded to one already-verified anchor bundle", () => {
+  const publisher = configDir("ocx-cl10-revocation-anchor-");
+  const first = signedBundle(publisher, "2026-08-12");
+  const second = signedBundle(publisher, "2026-08-13");
+
+  expect(() => createPublicEvidenceRevocation({
+    configDir: publisher,
+    targetBundle: first,
+    issuedDayUtc: "2026-08-13",
+    reason: "superseded",
+    targets: [
+      { kind: "bundle", id: first.bundleId },
+      { kind: "bundle", id: second.bundleId },
+    ],
+  })).toThrow(/target|unknown/i);
 });
