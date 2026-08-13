@@ -74,6 +74,8 @@ description: 供應商項目、認證、端點、模型目錄、配額、context
 | `noPenaltyModels?` | `string[]` | 拒絕 presence/frequency penalty 的模型。 |
 | `noStructuredOutputModels?` | `string[]` | 其 `openai-chat` 端點拒絕 `response_format` 的精確模型 ID。僅精確符合的請求模型會省略該欄位；structured-output 轉譯對其他每個 `openai-chat` 模型保持啟用。 |
 | `parallelToolCalls?` | `boolean` | 切換平行工具呼叫。OpenAI Chat 預設開啟；非 chat adapter 僅在明確 `true` 時廣告。 |
+| `routedToolDiscovery?` | `"auto" \| "deferred" \| "direct"` | routed 列的 Codex 工具探索政策。`auto`（預設）維持出廠行為：非 Cursor 的 routed 列為 deferred，Cursor 為 direct，且 Cursor 屬硬圍籬，即使設定 `deferred` 也會被忽略。只在已證實與 deferred 探索不相容的路由上設定 `direct`：它會把所有 MCP 宣告塞進第一個請求（實測 turn-1 負載增加 2.7 倍），而且在 code mode 下並**不會**讓原本可用的工具重新可達——Codex 無論哪種模式都會把巢狀工具裝到 `tools`/`ALL_TOOLS` 全域上。與代管網頁搜尋（`web_search_tool_type`）彼此獨立。 |
+| `modelRoutedToolDiscovery?` | `Record<string, "auto" \| "deferred" \| "direct">` | 依模型覆寫 `routedToolDiscovery`，讓混合閘道上某個不相容的模型不會拖累同組其他模型。比對遵循一般模型鍵規則（精確 id、`:` 之前的系列、忽略大小寫）；帶日期的 `-YYYYMMDD` 變體不會比對，因此請寫出確切失敗的模型 id。 |
 | `responsesItemIdRepair?` | `{ message?: string[]; reasoning?: string[]; repairMissingTerminalIds?: boolean }` | 預設停用的下游 SSE 修復，用於精確佔位 id 與缺失的終端 id。Function-call id 永不被重寫。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | 其 `tool_choice` 僅接受 `auto` 或 `none` 的模型；強制選擇被降級。 |
 | `preserveReasoningContentModels?` | `string[]` | 需要在 chat 歷史中保留先前 assistant `reasoning_content` 的模型。 |

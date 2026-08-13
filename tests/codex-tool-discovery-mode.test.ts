@@ -236,17 +236,139 @@ describe("combo tool-discovery derivation", () => {
     );
     expect(combo?.toolDiscoveryMode).toBe("direct");
   });
+
+  it("covers the remaining member compositions", () => {
+    // 025_combo_policy_tests.md: a single direct member must dominate regardless of position
+    // or arity, and an unknown member must not be read as direct.
+    expect(deriveComboToolDiscoveryMode(["direct", "deferred"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode(["deferred", "deferred", "direct"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode(["direct", "direct"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode(["deferred", undefined])).toBe("deferred");
+    expect(deriveComboToolDiscoveryMode([undefined, "direct"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode(["direct"])).toBe("direct");
+  });
+
+  it("omits the field entirely for an all-deferred combo", () => {
+    // Emitting it unconditionally broke codex-catalog's combo-shape assertion during
+    // development; an all-deferred combo must stay byte-identical to the pre-override shape.
+    const combo = deriveComboCatalogModel(
+      "combo/plain",
+      { targets: [{ provider: "p1", model: "a" }, { provider: "p2", model: "b" }], strategy: "failover" } as never,
+      [
+        { id: "a", provider: "p1", contextWindow: 200_000, toolDiscoveryMode: "deferred" },
+        { id: "b", provider: "p2", contextWindow: 200_000, toolDiscoveryMode: "deferred" },
+      ],
+    );
+    expect(combo).not.toHaveProperty("toolDiscoveryMode");
+  });
+
+  it("keeps a direct combo direct through catalog serialization under both alias shapes", () => {
+    for (const slug of ["combo/mix", "mix"]) {
+      const rows = buildCatalogEntries(null, [], [
+        { provider: "combo", id: slug.includes("/") ? slug.slice(slug.indexOf("/") + 1) : slug, toolDiscoveryMode: "direct" },
+      ]);
+      const row = rows.find(entry => typeof entry.slug === "string" && entry.slug.endsWith(slug.replace("combo/", "")));
+      expect(row?.supports_search_tool).toBe(false);
+      expect(row?.web_search_tool_type).toBe("text_and_image");
+    }
+  });
+});
+
+describe("routed tool-discovery backward compatibility", () => {
+  // 023_backward_compatibility_tests.md: the load-bearing promise of this feature is that an
+  // unconfigured tree is unchanged. Assert the WHOLE emitted row, not just the two policy
+  // fields, so an unrelated key silently appearing on routed rows also fails here.
+  it("emits byte-identical routed rows with zero configuration", () => {
+    const withoutPolicy = buildCatalogEntries(null, [], [{ provider: "deepseek", id: "glm-5.2" }]);
+    const withExplicitAuto = buildCatalogEntries(null, [], [
+      { provider: "deepseek", id: "glm-5.2", toolDiscoveryMode: "deferred" },
+    ]);
+    expect(JSON.stringify(withExplicitAuto)).toBe(JSON.stringify(withoutPolicy));
+  });
+
+  // Comparing two rows built by the same path cannot catch a key that leaks onto BOTH, so
+  // the key set is pinned absolutely and any new catalog field must be added here
+  // deliberately. Ablation-verified: injecting a stray field into the template-less branch
+  // fails this, and injecting one into normalizeRoutedCatalogEntry fails the template case.
+  const EXPECTED_ROUTED_KEYS = [
+    "apply_patch_tool_type",
+    "auto_compact_token_limit",
+    "base_instructions",
+    "comp_hash",
+    "context_window",
+    "default_reasoning_level",
+    "default_reasoning_summary",
+    "default_verbosity",
+    "description",
+    "display_name",
+    "effective_context_window_percent",
+    "experimental_supported_tools",
+    "input_modalities",
+    "max_context_window",
+    "priority",
+    "shell_type",
+    "slug",
+    "support_verbosity",
+    "supported_in_api",
+    "supported_reasoning_levels",
+    "supports_image_detail_original",
+    "supports_parallel_tool_calls",
+    "supports_reasoning_summaries",
+    "supports_search_tool",
+    "tool_mode",
+    "truncation_policy",
+    "visibility",
+    "web_search_tool_type",
+  ];
+
+  it("pins the exact emitted key set on the template-less path", () => {
+    const rows = buildCatalogEntries(null, [], [{ provider: "deepseek", id: "glm-5.2" }]);
+    const routed = rows.find(entry => entry.slug === "deepseek/glm-5.2");
+    expect(Object.keys(routed ?? {}).sort()).toEqual(EXPECTED_ROUTED_KEYS);
+  });
+
+  it("pins the emitted policy fields on the template path", () => {
+    // The template path runs normalizeRoutedCatalogEntry, which the fallback never calls, so
+    // it needs its own guard against an internal field reaching the Codex catalog.
+    const normalized = normalizeRoutedCatalogEntry({ slug: "deepseek/glm-5.2" } as never, false, {
+      toolDiscoveryMode: "direct",
+      providerId: "deepseek",
+      cursorRoute: false,
+    }) as Record<string, unknown>;
+    expect(normalized).not.toHaveProperty("toolDiscoveryMode");
+    expect(normalized).not.toHaveProperty("tool_discovery_mode");
+    expect(normalized).not.toHaveProperty("cursorRoute");
+    expect(normalized).not.toHaveProperty("leaked_internal_field");
+    expect(Object.keys(normalized).every(key => key === key.toLowerCase())).toBe(true);
+  });
+
+  it("keeps the Cursor row shape unchanged with zero configuration", () => {
+    const rows = buildCatalogEntries(null, [], [{ provider: "cursor", id: "gpt-5.5" }]);
+    const cursor = rows.find(entry => entry.slug === "cursor/gpt-5.5");
+    expect(cursor?.supports_search_tool).toBe(false);
+    expect(cursor).not.toHaveProperty("web_search_tool_type");
+    // The catalog must never carry the opencodex-only internal field.
+    expect(cursor).not.toHaveProperty("tool_discovery_mode");
+    expect(cursor).not.toHaveProperty("toolDiscoveryMode");
+  });
+
+  it("never serializes the internal policy field onto a routed row", () => {
+    const rows = buildCatalogEntries(null, [], [
+      { provider: "deepseek", id: "glm-5.2", toolDiscoveryMode: "direct", cursorRoute: false },
+    ]);
+    const routed = rows.find(entry => entry.slug === "deepseek/glm-5.2");
+    expect(routed).not.toHaveProperty("toolDiscoveryMode");
+    expect(routed).not.toHaveProperty("tool_discovery_mode");
+    expect(routed).not.toHaveProperty("cursorRoute");
+  });
 });
 
 describe("routed tool-discovery gather identity", () => {
   // Scope note, established by ablation: deleting `rtd`/`mrtd` from
-  // providerCatalogFingerprint leaves BOTH cases below green, because
-  // providerGraphIdentity already hashes the whole admitted provider row and refuses the
-  // join on its own. So these are end-to-end behavior guards, NOT proof that the
-  // fingerprint carries the policy. The fingerprint fields are added because it is an
-  // explicit allow-list whose omissions have leaked flights twice before (credentials,
-  // then reasoningEfforts, both reproduced against real routes) — keeping it semantically
-  // complete is defense in depth, and its correctness is not what these cases pin.
+  // providerCatalogFingerprint leaves these green, because providerGraphIdentity already
+  // hashes the whole admitted provider row and refuses the join on its own. These pin the
+  // ADMISSION INVARIANT (two policies never share one flight), not the fingerprint's field
+  // list. Do not read them as proof that `rtd`/`mrtd` are load-bearing; they are redundancy.
   function gatherConfig(routedToolDiscovery?: "auto" | "deferred" | "direct"): never {
     return {
       defaultProvider: "deepseek",
@@ -270,10 +392,18 @@ describe("routed tool-discovery gather identity", () => {
     expect(direct.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("direct");
   });
 
-  it("still reuses the gather for an identical policy", async () => {
-    const first = await gatherRoutedModels(gatherConfig("direct"));
-    const second = await gatherRoutedModels(gatherConfig("direct"));
-    expect(second).toEqual(first);
+  it("refuses to join one in-flight gather across two different policies", async () => {
+    // Sequential awaited calls cannot observe flight behavior at all: a completed flight is
+    // removed from the map immediately (provider-fetch.ts finally-block), so equal results
+    // would prove nothing. These run CONCURRENTLY so both are genuinely in flight together.
+    const [deferred, direct] = await Promise.all([
+      gatherRoutedModels(gatherConfig("deferred")),
+      gatherRoutedModels(gatherConfig("direct")),
+    ]);
+
+    // If the two policies shared a flight, one would be served the other's rows.
+    expect(deferred.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("deferred");
+    expect(direct.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("direct");
   });
 });
 
