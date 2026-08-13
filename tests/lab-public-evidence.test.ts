@@ -87,14 +87,18 @@ function protocolObservation(completedAt = DEFAULT_COMPLETED_AT): ObservationEve
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
-    assertions: [{
-      id: "method",
-      operator: "equals",
-      required: true,
-      passed: true,
-      expectedSummary: "CANARY-PRIVATE-EXPECTED",
-      observedSummary: "CANARY-PRIVATE-OBSERVED",
-    }],
+    assertions: [
+      {
+        id: "method",
+        operator: "equals",
+        required: true,
+        passed: true,
+        expectedSummary: "CANARY-PRIVATE-EXPECTED",
+        observedSummary: "CANARY-PRIVATE-OBSERVED",
+      },
+      { id: "message", operator: "equals", required: true, passed: true },
+      { id: "temperature", operator: "equals", required: true, passed: true },
+    ],
     environment: { localPath: "C:\\Users\\private\\repo" },
     artifactRefs: [],
     sourceRefs: ["request_1234567890", "decision_1234567890"],
@@ -173,7 +177,11 @@ describe("CL-10 public projection", () => {
     expect(result.record.subjectId).toMatch(/^[0-9a-f]{64}$/);
     expect(result.record.subjectId).not.toBe(event.subjectId);
     expect(result.record.recordId).toMatch(/^[0-9a-f]{64}$/);
-    expect(result.record.assertions).toEqual([{ id: "method", required: true, passed: true }]);
+    expect(result.record.assertions).toEqual([
+      { id: "method", required: true, passed: true },
+      { id: "message", required: true, passed: true },
+      { id: "temperature", required: true, passed: true },
+    ]);
 
     const serialized = JSON.stringify(result.record);
     for (const canary of [
