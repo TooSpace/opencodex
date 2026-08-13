@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
-import { ensureLabDirs, labCommunityDir, labPublicOriginDir } from "../paths";
+import { ensureLabDirs, labCommunityDir, labExportDir, labPublicOriginDir } from "../paths";
 import { communityBundleFileName } from "./community-files";
 import { readPrivateRegularFile } from "./file-safety";
 import {
@@ -93,11 +93,14 @@ function communityBundlePath(identity: PublicOriginIdentityV1, configDir?: strin
   );
 }
 
+function localExportPath(identity: PublicOriginIdentityV1, configDir?: string): string {
+  return join(labExportDir(configDir), `${identity.bundleId}.json`);
+}
+
 /**
  * Origin markers exist to recover local provenance for community copies when the export
- * or publisher key is later unavailable. If no exact community copy exists, the marker
- * is reclaimable under pressure because there is no public community object for purge to
- * classify. Unexpected entries are never deleted here.
+ * or publisher key is later unavailable. A marker is reclaimable only when neither the
+ * exact community copy nor its matching local export still exists.
  */
 function reclaimUnreferencedOrigins(
   dir: string,
@@ -111,6 +114,7 @@ function reclaimUnreferencedOrigins(
     if (path === preservePath) continue;
     const identity = { publisherKeyId: match[1]!, bundleId: match[2]! };
     if (pathExistsConservatively(communityBundlePath(identity, configDir))) continue;
+    if (pathExistsConservatively(localExportPath(identity, configDir))) continue;
     try {
       unlinkSync(path);
     } catch (error) {
