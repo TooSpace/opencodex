@@ -60,7 +60,11 @@ function fixedRecord() {
     verdict: "VERIFIED" as const,
     observedDayUtc: "2026-08-12",
     subject,
-    assertions: [{ id: "method", required: true, passed: true }],
+    assertions: [
+      { id: "method", required: true, passed: true },
+      { id: "message", required: true, passed: true },
+      { id: "temperature", required: true, passed: true },
+    ],
   };
   return { recordId: publicEvidenceId("record", withoutRecordId), ...withoutRecordId };
 }
@@ -82,13 +86,13 @@ describe("CL-10 public wire contract", () => {
     expect(bundle.publisher.publicKey).toBe(FIXED_PUBLIC_KEY);
     expect(bundle.publisher.keyId).toBe("4d5a347afcc7a1ac8d2dd4e573f0fbca2d2e90dd472c35df5c72bf2d2afca08f");
     expect(bundle.records[0]!.subjectId).toBe("982a06b98a218df5ed68ae88f5f203e1911a3e875343c6ed8d5d0b74ff4c2b25");
-    expect(bundle.records[0]!.recordId).toBe("b7afc1cfd18a7d6558cbdeb78ff1b14c4c9468f0163337e0aa3c48e0a32ca688");
-    expect(bundle.bundleId).toBe("9eedc731f4a944e1fe1c1494d9a829cd4ee7df1537e9e5111430a8ac4523a1b7");
-    expect(bundle.bundleDigest).toBe("5c5805485b29f4fb25c8c5c8d8c38afcd392e70d52f587183a0cf7c28d890e59");
+    expect(bundle.records[0]!.recordId).toBe("5bec20821bbf01f831e74ba469e7f18481c1209fdef209c76f482105de3e406d");
+    expect(bundle.bundleId).toBe("a7598b68a4cf884dc381b1d88111e74bfad5e74ceae2be8de55b88bac3250401");
+    expect(bundle.bundleDigest).toBe("aeef2f3e64a131588f6a34aaea1172c352a0c803f838690c2d6ee652ca74fb87");
     expect(bundle.signature).toEqual({
       algorithm: "ed25519",
-      signedDigest: "5c5805485b29f4fb25c8c5c8d8c38afcd392e70d52f587183a0cf7c28d890e59",
-      signature: "GYc+OouW1X0QeFgSaT6GEBF2DDFvFzz3N73O9SUmgmZsC4TW25N+FzTccfqHcqMRHt2HYuydvtFBwl8zTJx4Ag==",
+      signedDigest: "aeef2f3e64a131588f6a34aaea1172c352a0c803f838690c2d6ee652ca74fb87",
+      signature: "UAiI7Mz4/yIU5XjSuNZFSuyFPoAvGCy+x9cpTCwYKnFDq20AP6ipV3zowD3S4KP2iYfkXyHTMsMH3CEnz6lCBw==",
     });
     expect(verifyPublicEvidenceBundle(bundle)).toEqual({ status: "cryptographically_valid" });
   });
