@@ -1,22 +1,34 @@
 # 029 - Phase 2 exit gate
 
-> **Status 2026-08-13: Phase 2 is NOT fully closed — ONE item remains open.**
-> The configuration and catalog-policy half shipped (see PR "feat(codex): add
-> routed tool-discovery compatibility profiles").
+> **Status 2026-08-13: Phase 2 is NOT closed.** The configuration and
+> catalog-policy half shipped (see PR "feat(codex): add routed tool-discovery
+> compatibility profiles"), and an earlier revision of this note claimed the
+> `020` differential was the only thing left. An independent audit disproved
+> that. The honest remaining list:
 >
-> - **`020` single-variable code-mode differential** — still owed, and the only
->   open item. Until it runs, the claim in `004`/`094` that `direct` is a
->   comprehension lever rather than a reachability fix rests on a source reading
->   of a 2026-07-23 upstream clone. It needs a running Codex client, so it
->   belongs to the live phase, not the configuration PR.
+> - **`020` single-variable code-mode differential** — still owed. Until it
+>   runs, the claim in `004`/`094` that `direct` is a comprehension lever rather
+>   than a reachability fix rests on a source reading of a 2026-07-23 upstream
+>   clone. It needs a running Codex client, so it belongs to the live phase
+>   rather than the configuration PR. The docs now label that conclusion
+>   source-derived rather than proven.
+> - **`023` zero-config comparison against a real prior build** — the suite pins
+>   the exact emitted key set on both construction paths, which is strong
+>   regression coverage, but it is not the documented normalized diff of a
+>   current-`dev` catalog against a patched one.
+> - **`025` forcing-member diagnostic** — the combo explain surface does not yet
+>   name which member forced `direct`. Derivation itself is covered.
 >
-> Everything else in `020`-`025` is covered by
-> `tests/codex-tool-discovery-mode.test.ts`: the `023` backward-compat set, the
-> `025` combo compositions, and — as of the latched-fetch concurrency harness —
-> the full `024` set including model-map divergence and warm-cache policy
-> re-resolution. An earlier revision of this note listed those two `024` cases as
-> open; they had already landed, and the correction is recorded here rather than
-> silently edited away.
+> Closed since that earlier revision, with ablation evidence recorded in
+> `tests/codex-tool-discovery-mode.test.ts`: the `024` concurrency set (a
+> latched provider `fetch` proves identical policies JOIN one flight and
+> differing policies SPLIT, including model-map divergence and warm-cache
+> re-resolution), the full `025` five-row matrix plus deferred-key omission and
+> every alias shape (bare, slashed, native), the `023` on-disk load/save
+> round trip and downgrade preservation, and the `020` malformed-load warning.
+>
+> The retracted claim is left visible on purpose: this unit exists because a
+> plan asserted more verification than it had.
 
 Phase 2 is complete only when:
 

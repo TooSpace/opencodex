@@ -1607,6 +1607,45 @@ function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig): void 
  * provider/key behind a default config. Invalid fields are dropped with a warning; the management
  * write boundary still rejects invalid policies explicitly.
  */
+/**
+ * Warn when a hand-edited routed tool-discovery policy is dropped on load.
+ *
+ * The schema degrades these fields with `.catch(undefined)` so a typo cannot cost a user
+ * their providers or credentials, but silent degradation is its own failure: an operator
+ * whose emergency escape hatch was discarded by a typo would never learn it is inactive
+ * (devlog 014 — the same observability failure as #1529, at smaller scope). The write
+ * boundary still rejects these values outright; this only covers the tolerant load path.
+ */
+function warnDegradedRoutedToolDiscoveryForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const providers = (parsed as Record<string, unknown>).providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    // Runs BEFORE schema validation, so the provider name is untrusted: redact
+    // secret-shaped names and JSON-escape control characters before warning.
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    const p = provider as Record<string, unknown>;
+    const mode = p.routedToolDiscovery;
+    // Log only the received type, never the value: provider config can hold secrets.
+    if (mode !== undefined && !isRoutedToolDiscoveryMode(mode)) {
+      console.warn(`⚠️  config.json providers.${safeProviderName}.routedToolDiscovery (${typeof mode}) is invalid — ignoring the policy`);
+    }
+    const map = p.modelRoutedToolDiscovery;
+    if (map === undefined) continue;
+    if (!map || typeof map !== "object" || Array.isArray(map)) {
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelRoutedToolDiscovery (${typeof map}) is invalid — ignoring the map`);
+      continue;
+    }
+    for (const [modelId, value] of Object.entries(map as Record<string, unknown>)) {
+      if (isRoutedToolDiscoveryMode(value)) continue;
+      const safeModelId = JSON.stringify(redactSecretString(modelId));
+      console.warn(`⚠️  config.json providers.${safeProviderName}.modelRoutedToolDiscovery.${safeModelId} (${typeof value}) is invalid — ignoring the whole map`);
+      break;
+    }
+  }
+}
+
 function sanitizeRetryOn429ForLoad(parsed: unknown): void {
   if (!parsed || typeof parsed !== "object") return;
   const root = parsed as Record<string, unknown>;
@@ -2027,6 +2066,7 @@ export function loadConfig(): OcxConfig {
     const raw = readFileSync(configPath, "utf-8").replace(/^\uFEFF/, "");
     const parsed = JSON.parse(raw);
     sanitizeRetryOn429ForLoad(parsed);
+    warnDegradedRoutedToolDiscoveryForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -2418,6 +2458,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    warnDegradedRoutedToolDiscoveryForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {

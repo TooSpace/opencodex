@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { applyProviderConfigHints, buildCatalogEntries, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import { gatherRoutedModels } from "../src/codex/catalog";
 import { deriveComboCatalogModel } from "../src/codex/catalog/aggregation";
@@ -9,6 +12,7 @@ import {
   resolveConfiguredRoutedToolDiscoveryMode,
 } from "../src/codex/catalog/tool-discovery";
 import { clearModelCache } from "../src/codex/model-cache";
+import { getConfigPath, loadConfig, saveConfig } from "../src/config";
 import { validateConfigCandidate } from "../src/config";
 import type { OcxProviderConfig } from "../src/types";
 
@@ -268,15 +272,52 @@ describe("combo tool-discovery derivation", () => {
     expect(combo).not.toHaveProperty("toolDiscoveryMode");
   });
 
-  it("keeps a direct combo direct through catalog serialization under both alias shapes", () => {
-    for (const slug of ["combo/mix", "mix"]) {
-      const rows = buildCatalogEntries(null, [], [
-        { provider: "combo", id: slug.includes("/") ? slug.slice(slug.indexOf("/") + 1) : slug, toolDiscoveryMode: "direct" },
-      ]);
-      const row = rows.find(entry => typeof entry.slug === "string" && entry.slug.endsWith(slug.replace("combo/", "")));
-      expect(row?.supports_search_tool).toBe(false);
-      expect(row?.web_search_tool_type).toBe("text_and_image");
+  // 025 alias coverage: the policy must survive every combo alias SHAPE, because the alias
+  // is what Codex sees and a shape-dependent policy is the class of defect the unified
+  // Cursor fence already had to fix once.
+  it("carries a direct combo policy through every alias shape", () => {
+    const members: CatalogModel[] = [
+      { id: "a", provider: "p1", contextWindow: 200_000, maxInputTokens: 200_000, inputModalities: ["text"], toolDiscoveryMode: "deferred" },
+      { id: "b", provider: "p2", contextWindow: 200_000, maxInputTokens: 200_000, inputModalities: ["text"], toolDiscoveryMode: "direct" },
+    ];
+    const targets = [{ provider: "p1", model: "a" }, { provider: "p2", model: "b" }];
+
+    for (const alias of [undefined, "bare-combo", "vendor/slashed-combo"]) {
+      const combo = deriveComboCatalogModel(
+        "mixed",
+        { targets, strategy: "failover", ...(alias ? { alias } : {}) } as never,
+        members,
+      );
+      expect(combo?.toolDiscoveryMode).toBe("direct");
+
+      const slug = alias ?? "combo/mixed";
+      const rows = buildCatalogEntries(null, [], [{ ...combo!, ...(alias ? { alias } : {}) }], undefined, false, "default", new Set(alias ? [alias] : []));
+      const row = rows.find(entry => entry.slug === slug) ?? rows[0]!;
+      expect(row.supports_search_tool).toBe(false);
+      // Hosted search stays independent of the discovery policy on every shape.
+      expect(row.web_search_tool_type).toBe("text_and_image");
+      expect(row.tool_mode).toBe("code_mode_only");
     }
+  });
+
+  it("carries a direct combo policy through an explicit native alias", () => {
+    const combo = deriveComboCatalogModel(
+      "mixed",
+      { targets: [{ provider: "p1", model: "a" }, { provider: "p2", model: "b" }], strategy: "failover", alias: "gpt-5.6-sol", nativeAlias: true } as never,
+      [
+        { id: "a", provider: "p1", contextWindow: 200_000, toolDiscoveryMode: "deferred" },
+        { id: "b", provider: "p2", contextWindow: 200_000, toolDiscoveryMode: "direct" },
+      ],
+    );
+    expect(combo?.toolDiscoveryMode).toBe("direct");
+    expect(combo?.nativeAlias).toBe(true);
+
+    const rows = buildCatalogEntries(null, [], [combo!], undefined, false, "default", new Set(["gpt-5.6-sol"]));
+    const row = rows.find(entry => entry.slug === "gpt-5.6-sol") ?? rows[0]!;
+    // A combo that takes over a native slug is still a ROUTED row and must carry the
+    // resolved policy rather than inheriting native catalog defaults.
+    expect(row.supports_search_tool).toBe(false);
+    expect(row.tool_mode).toBe("code_mode_only");
   });
 });
 
@@ -376,41 +417,124 @@ describe("routed tool-discovery backward compatibility", () => {
     expect(cursor).not.toHaveProperty("toolDiscoveryMode");
   });
 
-  it("does not persist the new fields when reading a pre-field config", () => {
-    // 023: a config written before these fields existed must round-trip unchanged; a
-    // materialized default would rewrite every user's file on the next unrelated save.
-    const legacy = {
-      defaultProvider: "deepseek",
-      providers: { deepseek: { adapter: "openai-responses", baseUrl: "https://example.invalid" } },
-    };
-    const result = validateConfigCandidate(legacy);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected acceptance");
-    const provider = result.config.providers.deepseek as Record<string, unknown>;
-    expect(Object.hasOwn(provider, "routedToolDiscovery")).toBe(false);
-    expect(Object.hasOwn(provider, "modelRoutedToolDiscovery")).toBe(false);
+  // These drive the REAL on-disk round trip (loadConfig/saveConfig against a temp
+  // OPENCODEX_HOME), not just validateConfigCandidate. Validating a candidate object cannot
+  // prove the file-level promises in 023: that a pre-field config gains nothing on read, and
+  // that an unrelated save preserves fields a newer binary wrote.
+  function withTempHome<T>(run: () => T): T {
+    const previous = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-tool-discovery-compat-"));
+    process.env.OPENCODEX_HOME = home;
+    try { return run(); }
+    finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+
+  it("warns instead of silently degrading a malformed policy on load", () => {
+    // 020: the load path is tolerant on purpose, but an operator whose emergency escape
+    // hatch was dropped by a typo must be told — silence would repeat the #1529
+    // observability failure at smaller scope.
+    withTempHome(() => {
+      const base = {
+        port: 10100,
+        defaultProvider: "test",
+        providers: {
+          test: {
+            adapter: "openai-chat",
+            baseUrl: "http://127.0.0.1:1/v1",
+            apiKey: "k",
+            allowPrivateNetwork: true,
+            routedToolDiscovery: "eager",
+            modelRoutedToolDiscovery: { "glm-5.2": "nope" },
+          },
+        },
+      };
+      saveConfig(base as never);
+      writeFileSync(getConfigPath(), `${JSON.stringify(base, null, 2)}\n`);
+
+      const warnings: string[] = [];
+      const original = console.warn;
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+      let loaded;
+      try { loaded = loadConfig(); }
+      finally { console.warn = original; }
+
+      // Degraded, not fatal: the provider and its credential survive.
+      const provider = loaded.providers.test as unknown as Record<string, unknown>;
+      expect(provider.apiKey).toBe("k");
+      expect(provider.routedToolDiscovery).toBeUndefined();
+      expect(provider.modelRoutedToolDiscovery).toBeUndefined();
+
+      const joined = warnings.join("\n");
+      expect(joined).toContain("routedToolDiscovery");
+      expect(joined).toContain("modelRoutedToolDiscovery");
+      // Never echo the offending value; provider config can hold secrets.
+      expect(joined).not.toContain("eager");
+      expect(joined).not.toContain("nope");
+    });
   });
 
-  it("preserves the fields through an unrelated save (downgrade tolerance)", () => {
-    // 023: an older binary sees these as unknown provider keys and must carry them through
-    // `.passthrough()` rather than dropping a newer operator's escape hatch.
-    const configured = {
-      defaultProvider: "deepseek",
-      providers: {
-        deepseek: {
-          adapter: "openai-responses",
-          baseUrl: "https://example.invalid",
-          routedToolDiscovery: "direct",
-          modelRoutedToolDiscovery: { "glm-5.2": "deferred" },
+  it("does not materialize the new fields when loading a pre-field config file", () => {
+    withTempHome(() => {
+      // A config written before these fields existed. A materialized default here would
+      // rewrite every existing user's file on their next unrelated save.
+      const legacy = {
+        port: 10100,
+        defaultProvider: "test",
+        providers: {
+          test: { adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1", apiKey: "k", allowPrivateNetwork: true },
         },
-      },
-    };
-    const result = validateConfigCandidate(configured);
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw new Error("expected acceptance");
-    const provider = result.config.providers.deepseek as Record<string, unknown>;
-    expect(provider.routedToolDiscovery).toBe("direct");
-    expect(provider.modelRoutedToolDiscovery).toEqual({ "glm-5.2": "deferred" });
+      };
+      saveConfig(legacy as never);
+      writeFileSync(getConfigPath(), `${JSON.stringify(legacy, null, 2)}\n`);
+
+      const loaded = loadConfig();
+      const provider = loaded.providers.test as unknown as Record<string, unknown>;
+      expect(Object.hasOwn(provider, "routedToolDiscovery")).toBe(false);
+      expect(Object.hasOwn(provider, "modelRoutedToolDiscovery")).toBe(false);
+
+      // A no-op read followed by an unrelated save must not introduce them either.
+      saveConfig({ ...loaded, port: 10101 } as never);
+      const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, never>;
+      const savedProvider = (onDisk.providers as Record<string, Record<string, unknown>>).test;
+      expect(Object.hasOwn(savedProvider, "routedToolDiscovery")).toBe(false);
+      expect(Object.hasOwn(savedProvider, "modelRoutedToolDiscovery")).toBe(false);
+    });
+  });
+
+  it("preserves the fields through an unrelated save, the downgrade contract", () => {
+    withTempHome(() => {
+      // Written on disk as UNKNOWN provider keys — the shape an older binary sees. The
+      // schema is .passthrough(), so an unrelated save must carry them through rather than
+      // dropping a newer operator's escape hatch.
+      const configured = {
+        port: 10100,
+        defaultProvider: "test",
+        providers: {
+          test: {
+            adapter: "openai-chat",
+            baseUrl: "http://127.0.0.1:1/v1",
+            apiKey: "k",
+            allowPrivateNetwork: true,
+            routedToolDiscovery: "direct",
+            modelRoutedToolDiscovery: { "glm-5.2": "deferred" },
+          },
+        },
+      };
+      saveConfig(configured as never);
+      writeFileSync(getConfigPath(), `${JSON.stringify(configured, null, 2)}\n`);
+
+      const loaded = loadConfig();
+      saveConfig({ ...loaded, port: 10102 } as never);
+
+      const onDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as Record<string, never>;
+      const savedProvider = (onDisk.providers as Record<string, Record<string, unknown>>).test;
+      expect(savedProvider.routedToolDiscovery).toBe("direct");
+      expect(savedProvider.modelRoutedToolDiscovery).toEqual({ "glm-5.2": "deferred" });
+    });
   });
 
   it("never serializes the internal policy field onto a routed row", () => {
