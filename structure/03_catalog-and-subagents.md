@@ -165,9 +165,12 @@ bypasses that sidecar and has no proven deferred path — the row carries the di
 That per-surface default is now the `auto` case of a resolved policy rather than a hard-coded
 boolean. `OcxProviderConfig.routedToolDiscovery` and its per-model map
 `modelRoutedToolDiscovery` let one proven-incompatible route opt into `direct` without moving
-any sibling; `auto` reproduces the shipped shape byte-for-byte. Resolution happens once in
-`applyProviderConfigHints()` and rides `CatalogModel.toolDiscoveryMode`, so configured,
-live-discovered, cached and combo-derived rows agree, and `auto` never reaches serialization.
+any sibling. `auto` reproduces the shipped routed-row shape, asserted per-key on both the
+template and template-less paths rather than by a whole-catalog diff against a prior build.
+Resolution happens once in `applyProviderConfigHints()` and rides
+`CatalogModel.toolDiscoveryMode`; `auto` never reaches serialization. Custom-model and trusted
+`openai-apikey` rows are rebuilt outside that pass and resolve the policy explicitly, so the
+propagation is deliberate at each construction site rather than automatic.
 Precedence is Cursor hard fence > model override > provider override > auto; a combo resolves
 conservatively, since one public row cannot vary after target selection.
 
