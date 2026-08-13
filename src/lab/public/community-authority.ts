@@ -14,6 +14,25 @@ import { findPublicRouteRegistryEntry } from "./registry";
 import type { PublicEvidenceBundleV1, PublicEvidenceRecordV1, PublicRouteSubjectV1 } from "./types";
 import { PublicEvidenceValidationError } from "./validate";
 
+let cachedCaseAuthority: ReturnType<typeof loadCaseAuthority> | null = null;
+let cachedFabricCaseAuthority: ReturnType<typeof loadFabricCaseAuthority> | null = null;
+let cachedVerifierManifestDigest: string | null = null;
+
+function caseAuthority(): ReturnType<typeof loadCaseAuthority> {
+  cachedCaseAuthority ??= loadCaseAuthority();
+  return cachedCaseAuthority;
+}
+
+function fabricCaseAuthority(): ReturnType<typeof loadFabricCaseAuthority> {
+  cachedFabricCaseAuthority ??= loadFabricCaseAuthority();
+  return cachedFabricCaseAuthority;
+}
+
+function reviewedVerifierManifestDigest(): string {
+  cachedVerifierManifestDigest ??= verifierManifestDigest();
+  return cachedVerifierManifestDigest;
+}
+
 function validateRouteAuthority(subject: PublicRouteSubjectV1): void {
   const entry = findPublicRouteRegistryEntry(subject.providerId, subject.modelId);
   if (!entry || !entry.adapterFamilies.includes(subject.adapterFamily)) {
@@ -56,7 +75,7 @@ function validateAssertionAuthority(
 }
 
 function validateTaskAuthority(record: PublicEvidenceRecordV1): void {
-  const fabricAuthority = loadFabricCaseAuthority();
+  const fabricAuthority = fabricCaseAuthority();
   const caseRecord = fabricAuthority.cases.find((candidate) => candidate.id === FABRIC_SCENARIO_ID);
   if (
     !caseRecord
@@ -68,7 +87,7 @@ function validateTaskAuthority(record: PublicEvidenceRecordV1): void {
     || record.subject.taskClassId !== FABRIC_TASK_CLASS_ID
     || record.subject.taskClassVersion !== FABRIC_TASK_CLASS_VERSION
     || record.subject.taskFixtureDigest !== caseRecord.fixture.digest
-    || record.subject.verifierManifestDigest !== verifierManifestDigest()
+    || record.subject.verifierManifestDigest !== reviewedVerifierManifestDigest()
     || record.subject.fabricCompatibilityVersion !== FABRIC_COMPATIBILITY_VERSION
   ) {
     throw new PublicEvidenceValidationError("public_authority", "task scenario/verifier authority mismatch");
@@ -83,7 +102,7 @@ function validateScenarioAuthority(record: PublicEvidenceRecordV1): void {
     return;
   }
 
-  const authority = loadCaseAuthority();
+  const authority = caseAuthority();
   const caseRecord = authority.cases.find((candidate) => candidate.id === record.scenarioId);
   if (
     !caseRecord
