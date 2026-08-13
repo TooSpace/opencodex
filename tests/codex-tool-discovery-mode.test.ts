@@ -8,6 +8,7 @@ import {
   isCursorRoute,
   resolveConfiguredRoutedToolDiscoveryMode,
 } from "../src/codex/catalog/tool-discovery";
+import { clearModelCache } from "../src/codex/model-cache";
 import { validateConfigCandidate } from "../src/config";
 import type { OcxProviderConfig } from "../src/types";
 
@@ -217,9 +218,14 @@ describe("routed tool-discovery propagation", () => {
 });
 
 describe("combo tool-discovery derivation", () => {
+  // Full matrix from devlog 025_combo_policy_tests.md, including the migration rows where a
+  // member has not resolved a mode yet.
   it("is conservative: one direct member forces the combo direct", () => {
     expect(deriveComboToolDiscoveryMode(["deferred", "deferred"])).toBe("deferred");
     expect(deriveComboToolDiscoveryMode(["deferred", "direct"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode(["direct", "direct"])).toBe("direct");
+    expect(deriveComboToolDiscoveryMode([undefined, "deferred"])).toBe("deferred");
+    expect(deriveComboToolDiscoveryMode([undefined, "direct"])).toBe("direct");
     expect(deriveComboToolDiscoveryMode([undefined, undefined])).toBe("deferred");
     expect(deriveComboToolDiscoveryMode([])).toBe("deferred");
   });
@@ -327,19 +333,37 @@ describe("routed tool-discovery backward compatibility", () => {
     expect(Object.keys(routed ?? {}).sort()).toEqual(EXPECTED_ROUTED_KEYS);
   });
 
-  it("pins the emitted policy fields on the template path", () => {
+  it("pins the exact emitted key set on the template path", () => {
     // The template path runs normalizeRoutedCatalogEntry, which the fallback never calls, so
-    // it needs its own guard against an internal field reaching the Codex catalog.
+    // it needs its own guard. This is an ABSOLUTE key set rather than a list of forbidden
+    // names: an earlier version only rejected the three policy fields plus one sentinel, so
+    // a stray field under any other name passed straight through it.
     const normalized = normalizeRoutedCatalogEntry({ slug: "deepseek/glm-5.2" } as never, false, {
       toolDiscoveryMode: "direct",
       providerId: "deepseek",
       cursorRoute: false,
     }) as Record<string, unknown>;
-    expect(normalized).not.toHaveProperty("toolDiscoveryMode");
-    expect(normalized).not.toHaveProperty("tool_discovery_mode");
-    expect(normalized).not.toHaveProperty("cursorRoute");
-    expect(normalized).not.toHaveProperty("leaked_internal_field");
-    expect(Object.keys(normalized).every(key => key === key.toLowerCase())).toBe(true);
+    expect(Object.keys(normalized).sort()).toEqual([
+      "apply_patch_tool_type",
+      "auto_compact_token_limit",
+      "comp_hash",
+      "context_window",
+      "default_reasoning_summary",
+      "default_verbosity",
+      "effective_context_window_percent",
+      "experimental_supported_tools",
+      "input_modalities",
+      "max_context_window",
+      "slug",
+      "support_verbosity",
+      "supports_image_detail_original",
+      "supports_parallel_tool_calls",
+      "supports_reasoning_summaries",
+      "supports_search_tool",
+      "tool_mode",
+      "truncation_policy",
+      "web_search_tool_type",
+    ]);
   });
 
   it("keeps the Cursor row shape unchanged with zero configuration", () => {
@@ -350,6 +374,43 @@ describe("routed tool-discovery backward compatibility", () => {
     // The catalog must never carry the opencodex-only internal field.
     expect(cursor).not.toHaveProperty("tool_discovery_mode");
     expect(cursor).not.toHaveProperty("toolDiscoveryMode");
+  });
+
+  it("does not persist the new fields when reading a pre-field config", () => {
+    // 023: a config written before these fields existed must round-trip unchanged; a
+    // materialized default would rewrite every user's file on the next unrelated save.
+    const legacy = {
+      defaultProvider: "deepseek",
+      providers: { deepseek: { adapter: "openai-responses", baseUrl: "https://example.invalid" } },
+    };
+    const result = validateConfigCandidate(legacy);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected acceptance");
+    const provider = result.config.providers.deepseek as Record<string, unknown>;
+    expect(Object.hasOwn(provider, "routedToolDiscovery")).toBe(false);
+    expect(Object.hasOwn(provider, "modelRoutedToolDiscovery")).toBe(false);
+  });
+
+  it("preserves the fields through an unrelated save (downgrade tolerance)", () => {
+    // 023: an older binary sees these as unknown provider keys and must carry them through
+    // `.passthrough()` rather than dropping a newer operator's escape hatch.
+    const configured = {
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.invalid",
+          routedToolDiscovery: "direct",
+          modelRoutedToolDiscovery: { "glm-5.2": "deferred" },
+        },
+      },
+    };
+    const result = validateConfigCandidate(configured);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected acceptance");
+    const provider = result.config.providers.deepseek as Record<string, unknown>;
+    expect(provider.routedToolDiscovery).toBe("direct");
+    expect(provider.modelRoutedToolDiscovery).toEqual({ "glm-5.2": "deferred" });
   });
 
   it("never serializes the internal policy field onto a routed row", () => {
@@ -364,46 +425,117 @@ describe("routed tool-discovery backward compatibility", () => {
 });
 
 describe("routed tool-discovery gather identity", () => {
-  // Scope note, established by ablation: deleting `rtd`/`mrtd` from
-  // providerCatalogFingerprint leaves these green, because providerGraphIdentity already
-  // hashes the whole admitted provider row and refuses the join on its own. These pin the
-  // ADMISSION INVARIANT (two policies never share one flight), not the fingerprint's field
-  // list. Do not read them as proof that `rtd`/`mrtd` are load-bearing; they are redundancy.
-  function gatherConfig(routedToolDiscovery?: "auto" | "deferred" | "direct"): never {
+  // Ablation matrix (run 2026-08-13), so nobody has to guess what these pin:
+  //   remove rtd/mrtd from providerCatalogFingerprint ............ still green
+  //   neutralize discoveryPolicyIdentity ......................... still green
+  //   neutralize providerGraphIdentity ........................... still green
+  //   neutralize ALL THREE ....................................... 2 of 3 FAIL
+  // So these are not vacuous — they detect a real flight collision — but no single
+  // mechanism is what they pin, because the three are redundant by design. The
+  // fingerprint fields are kept as defense in depth: it is an explicit allow-list whose
+  // omissions leaked flights twice before (credentials, then reasoningEfforts, both
+  // reproduced against real routes), and its correctness is NOT what these prove.
+  function liveGatherConfig(
+    fetchImpl: typeof globalThis.fetch,
+    routedToolDiscovery?: "auto" | "deferred" | "direct",
+    modelRoutedToolDiscovery?: Record<string, "auto" | "deferred" | "direct">,
+  ): never {
     return {
-      defaultProvider: "deepseek",
+      defaultProvider: "tdlab",
       providers: {
-        deepseek: {
-          adapter: "openai-responses",
-          baseUrl: "https://example.invalid",
-          models: ["glm-5.2"],
-          liveModels: false,
+        tdlab: {
+          adapter: "openai-chat",
+          baseUrl: "http://127.0.0.1:59117/v1",
+          apiKey: "sk-test",
+          liveModels: true,
+          // Caller-owned transport executor: the supported injection point (it is excluded
+          // from provider-graph identity as non-admitted state).
+          fetch: fetchImpl,
+          // Keeps the gather hermetic: the destination policy resolves real DNS and
+          // fail-closes on an unresolvable host, which would short-circuit before the
+          // latched fetch is ever entered.
+          allowPrivateNetwork: true,
           ...(routedToolDiscovery ? { routedToolDiscovery } : {}),
+          ...(modelRoutedToolDiscovery ? { modelRoutedToolDiscovery } : {}),
         },
       },
     } as never;
   }
 
-  it("gathers distinct results for two different policies", async () => {
-    const deferred = await gatherRoutedModels(gatherConfig());
-    const direct = await gatherRoutedModels(gatherConfig("direct"));
+  // A sequential pair cannot observe flight REUSE at all: a completed flight is removed from
+  // gatherInflight in its finally block, so two wholly independent gathers also compare
+  // equal. Observing the join needs real concurrency plus a way to count upstream discovery.
+  function latchedFetch(): { fetch: typeof globalThis.fetch; release: () => void; calls: () => number } {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const impl = (async () => {
+      calls += 1;
+      await gate;
+      return new Response(
+        JSON.stringify({ data: [{ id: "glm-5.2" }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof globalThis.fetch;
+    return { fetch: impl, release, calls: () => calls };
+  }
 
-    expect(deferred.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("deferred");
-    expect(direct.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("direct");
+  function mode(models: CatalogModel[]): string | undefined {
+    return models.find(model => model.id === "glm-5.2")?.toolDiscoveryMode;
+  }
+
+  it("joins one flight for an identical policy but splits for a different one", async () => {
+    clearModelCache("tdlab");
+    const same = latchedFetch();
+    const joined = Promise.all([
+      gatherRoutedModels(liveGatherConfig(same.fetch, "direct")),
+      gatherRoutedModels(liveGatherConfig(same.fetch, "direct")),
+    ]);
+    same.release();
+    const [first, second] = await joined;
+    // One upstream discovery for two concurrent identical-policy callers: they joined.
+    expect(same.calls()).toBe(1);
+    expect(mode(first)).toBe("direct");
+    expect(second).toEqual(first);
+
+    clearModelCache("tdlab");
+    const split = latchedFetch();
+    const separate = Promise.all([
+      gatherRoutedModels(liveGatherConfig(split.fetch, "deferred")),
+      gatherRoutedModels(liveGatherConfig(split.fetch, "direct")),
+    ]);
+    split.release();
+    const [asDeferred, asDirect] = await separate;
+    // Two flights: joining would serve one config the other's catalog.
+    expect(split.calls()).toBe(2);
+    expect(mode(asDeferred)).toBe("deferred");
+    expect(mode(asDirect)).toBe("direct");
   });
 
-  it("refuses to join one in-flight gather across two different policies", async () => {
-    // Sequential awaited calls cannot observe flight behavior at all: a completed flight is
-    // removed from the map immediately (provider-fetch.ts finally-block), so equal results
-    // would prove nothing. These run CONCURRENTLY so both are genuinely in flight together.
-    const [deferred, direct] = await Promise.all([
-      gatherRoutedModels(gatherConfig("deferred")),
-      gatherRoutedModels(gatherConfig("direct")),
+  it("splits concurrent flights that differ only in the per-model map", async () => {
+    clearModelCache("tdlab");
+    const split = latchedFetch();
+    const both = Promise.all([
+      gatherRoutedModels(liveGatherConfig(split.fetch, undefined, { "glm-5.2": "direct" })),
+      gatherRoutedModels(liveGatherConfig(split.fetch, undefined, { "glm-5.2": "deferred" })),
     ]);
+    split.release();
+    const [direct, deferred] = await both;
+    expect(split.calls()).toBe(2);
+    expect(mode(direct)).toBe("direct");
+    expect(mode(deferred)).toBe("deferred");
+  });
 
-    // If the two policies shared a flight, one would be served the other's rows.
-    expect(deferred.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("deferred");
-    expect(direct.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("direct");
+  it("re-resolves the policy against a warm model cache", async () => {
+    clearModelCache("tdlab");
+    const warm = latchedFetch();
+    const first = gatherRoutedModels(liveGatherConfig(warm.fetch, "deferred"));
+    warm.release();
+    expect(mode(await first)).toBe("deferred");
+
+    // The model list may now come from the warm cache, but the POLICY must be re-resolved
+    // from the current config rather than inherited from the cached gather.
+    expect(mode(await gatherRoutedModels(liveGatherConfig(warm.fetch, "direct")))).toBe("direct");
   });
 });
 
