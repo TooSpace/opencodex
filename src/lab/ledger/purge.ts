@@ -257,10 +257,10 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
         }
         kept.push(tombstone);
         atomicRewriteLedger(paths.ledgerPath, kept);
+        completed.push("ledger");
       } else {
         appendLabEvent(paths.ledgerPath, tombstone);
       }
-      completed.push("ledger");
     }
 
     if (purgeActions.includes("sqlite")) {
