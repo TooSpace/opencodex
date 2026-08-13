@@ -9,7 +9,7 @@ import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./pr
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { parseStrictPublicJson } from "./strict-json";
 import type { PublicEvidenceBundleV1 } from "./types";
-import { verifyPublicEvidenceBundle } from "./signature";
+import { loadExistingPublicPublisher, verifyPublicEvidenceBundle } from "./signature";
 import { PublicEvidenceValidationError } from "./validate";
 
 function encodedBytes(value: string): number {
@@ -66,6 +66,18 @@ function completeLocalExportProvenance(
   result: { path: string; created: boolean },
   configDir?: string,
 ): { path: string; created: boolean } {
+  const local = loadExistingPublicPublisher(configDir);
+  if (
+    !local
+    || local.publisher.algorithm !== bundle.publisher.algorithm
+    || local.publisher.keyId !== bundle.publisher.keyId
+    || local.publisher.publicKey !== bundle.publisher.publicKey
+  ) {
+    throw new PublicEvidenceValidationError(
+      "public_export_publisher_mismatch",
+      "local export storage requires the installation publisher that signed the bundle",
+    );
+  }
   recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
   return result;
 }
