@@ -31,11 +31,19 @@ const PUBLIC_TEXT_ARTIFACT_MEDIA_TYPES = new Set([
   "text/plain; charset=utf-8",
 ]);
 
+function containsIpLiteral(value: string): boolean {
+  if (isIP(value) !== 0) return true;
+  for (const candidate of value.match(/[0-9A-Fa-f:]{2,}/g) ?? []) {
+    if (candidate.includes(":") && isIP(candidate) === 6) return true;
+  }
+  return false;
+}
+
 function assertPrivacySafeString(value: string, field: string): void {
-  // `PUBLIC_IDENTIFIER` intentionally permits `:` for reviewed identifiers, so the
-  // regex-only scanner cannot safely use a broad colon pattern. Node's IP parser gives
-  // us an exact whole-string IPv4/IPv6 check without rejecting ordinary version names.
-  if (isIP(value) !== 0) {
+  // `PUBLIC_IDENTIFIER` intentionally permits `:` for reviewed identifiers, so use
+  // Node's IP parser to validate colon-bearing candidates instead of rejecting them
+  // with a broad regex. This catches both whole-string and embedded IPv6 literals.
+  if (containsIpLiteral(value)) {
     throw new PublicEvidenceValidationError(
       "privacy_rejected",
       `${field} contains forbidden IP address material`,
