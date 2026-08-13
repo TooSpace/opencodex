@@ -134,6 +134,18 @@ test("operator import of a third-party verified bundle does not create local-ori
   expect(listLocalPublicOrigins(home)).toEqual([]);
 });
 
+test("failed own-origin commit rolls back a newly imported community copy", () => {
+  const home = configDir("ocx-cl10-origin-rollback-");
+  const bundle = signedBundle(home);
+  const dir = labPublicOriginDir(home);
+  for (let index = 0; index < 1024; index += 1) {
+    writeFileSync(join(dir, `occupied-${String(index).padStart(4, "0")}`), "x", { mode: 0o600 });
+  }
+
+  expect(() => importCommunityEvidenceValue(bundle, home)).toThrow(/origin marker bound/i);
+  expect(listCommunityEvidence(home)).toEqual([]);
+});
+
 test("origin and community persistence recover after same-process parent-directory sync failures", () => {
   if (process.platform === "win32") return;
   const home = configDir("ocx-cl10-origin-recovery-");
