@@ -1,0 +1,9 @@
+Command attempted:
+  git clone --depth 1 --branch dev https://github.com/lidge-jun/opencodex.git /mnt/data/opencodex-dev-verify
+
+Result:
+  fatal: unable to access 'https://github.com/lidge-jun/opencodex.git/': Could not resolve host: github.com
+
+Disposition:
+  No full-repository build or Bun test result is claimed. GitHub source inspection,
+  dependency-free prototypes, and worktree validation scripts are kept separate.

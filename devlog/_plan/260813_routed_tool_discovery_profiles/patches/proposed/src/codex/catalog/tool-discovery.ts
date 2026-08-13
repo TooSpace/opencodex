@@ -1,0 +1,71 @@
+import type {
+  OcxProviderConfig,
+  OcxRoutedToolDiscoveryMode,
+} from "../../types";
+import { modelRecordValue } from "../../reasoning-effort";
+
+export type ResolvedRoutedToolDiscoveryMode = "deferred" | "direct";
+
+export interface ResolvedRoutedToolDiscovery {
+  readonly mode: ResolvedRoutedToolDiscoveryMode;
+  readonly source: "cursor-hard-fence" | "model-override" | "provider-override" | "default";
+  readonly configured: OcxRoutedToolDiscoveryMode;
+  readonly warning?: string;
+}
+
+export const ROUTED_TOOL_DISCOVERY_MODES: readonly OcxRoutedToolDiscoveryMode[] = [
+  "auto",
+  "deferred",
+  "direct",
+] as const;
+
+/**
+ * Resolve one routed provider/model to a catalog-facing mode. `auto` never reaches
+ * serialization. Cursor is a hard fence because its custom runTurn transport has
+ * no verified deferred/sidecar route.
+ */
+export function resolveRoutedToolDiscoveryMode(
+  providerName: string,
+  provider: Pick<
+    OcxProviderConfig,
+    "adapter" | "routedToolDiscovery" | "modelRoutedToolDiscovery"
+  >,
+  modelId: string,
+): ResolvedRoutedToolDiscovery {
+  const modelConfigured = modelRecordValue(provider.modelRoutedToolDiscovery, modelId);
+  const configured = modelConfigured ?? provider.routedToolDiscovery ?? "auto";
+  const source: ResolvedRoutedToolDiscovery["source"] = modelConfigured !== undefined
+    ? "model-override"
+    : provider.routedToolDiscovery !== undefined
+      ? "provider-override"
+      : "default";
+
+  if (providerName === "cursor" || provider.adapter === "cursor") {
+    return {
+      mode: "direct",
+      source: "cursor-hard-fence",
+      configured,
+      ...(configured === "deferred"
+        ? { warning: "Configured deferred discovery was ignored for Cursor." }
+        : {}),
+    };
+  }
+
+  if (configured === "direct") {
+    return {
+      mode: "direct",
+      source,
+      configured,
+      warning: "Direct discovery may expand the first request with full MCP declarations.",
+    };
+  }
+
+  return { mode: "deferred", source, configured };
+}
+
+/** A combo uses one catalog row, so one direct-only member forces direct. */
+export function deriveComboToolDiscoveryMode(
+  memberModes: readonly (ResolvedRoutedToolDiscoveryMode | undefined)[],
+): ResolvedRoutedToolDiscoveryMode {
+  return memberModes.some(mode => mode === "direct") ? "direct" : "deferred";
+}

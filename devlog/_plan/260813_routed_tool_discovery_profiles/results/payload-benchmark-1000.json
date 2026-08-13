@@ -1,0 +1,20 @@
+{
+  "generatedAt": "2026-08-13T10:49:31.303Z",
+  "unit": "UTF-8 bytes",
+  "note": "Synthetic structural benchmark; it is not a tokenizer or a capture of a live Codex request.",
+  "toolCount": 1000,
+  "modes": {
+    "eagerFullSchemas": 716969,
+    "codeModeNameDescriptionIndex": 209894,
+    "threeMetaTools": 744
+  },
+  "ratios": {
+    "eagerToCodeModeIndex": 3.416,
+    "eagerToMetaTools": 963.668,
+    "codeModeIndexToMetaTools": 282.116
+  },
+  "perToolBytes": {
+    "eagerFullSchemas": 716.97,
+    "codeModeNameDescriptionIndex": 209.89
+  }
+}

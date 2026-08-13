@@ -1,0 +1,12 @@
+{
+  "checkedAtKst": "2026-08-13",
+  "branch": "dev",
+  "packagingTimeHead": "2cdbf66a23f9fd8f2f38dcc702ccd3f2e60ac535",
+  "message": "Merge pull request #1600 ... scale timing watchdogs and per-test timeout for loaded CI runners",
+  "directParents": [
+    "5703473041a9f4f415743652de5d86d51fd66db5",
+    "12c4fe603c607064dcf83d652ec6fefe913a18ec"
+  ],
+  "toolDiscoverySemanticBase": "5703473041a9f4f415743652de5d86d51fd66db5",
+  "note": "Relevant catalog/config source seams were fetched from dev after the head advanced. PR #1600 is a CI timeout/watchdog merge; PR #1596 remains the direct parent carrying the discovery policy change."
+}

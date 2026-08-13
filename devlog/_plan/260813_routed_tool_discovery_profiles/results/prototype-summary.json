@@ -1,0 +1,13 @@
+{
+  "suite": "dependency-free routed tool discovery policy prototype",
+  "runtime": "Node.js v22.16.0",
+  "tests": 17,
+  "passed": 17,
+  "failed": 0,
+  "fullRepositorySuiteExecuted": false,
+  "limitations": [
+    "No complete OpenCodex checkout was available in the artifact runtime",
+    "Bun typecheck and repository test suite were not executed",
+    "Live Codex CLI/App and Browser plugin scenarios require external clients and credentials"
+  ]
+}

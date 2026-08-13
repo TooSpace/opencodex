@@ -1,0 +1,112 @@
+TAP version 13
+# Subtest: non-Cursor default preserves deferred discovery
+ok 1 - non-Cursor default preserves deferred discovery
+  ---
+  duration_ms: 0.840758
+  type: 'test'
+  ...
+# Subtest: provider auto resolves to deferred
+ok 2 - provider auto resolves to deferred
+  ---
+  duration_ms: 0.112347
+  type: 'test'
+  ...
+# Subtest: provider deferred resolves to deferred
+ok 3 - provider deferred resolves to deferred
+  ---
+  duration_ms: 0.119187
+  type: 'test'
+  ...
+# Subtest: provider direct resolves to direct and emits payload warning
+ok 4 - provider direct resolves to direct and emits payload warning
+  ---
+  duration_ms: 0.287757
+  type: 'test'
+  ...
+# Subtest: model direct wins over provider deferred
+ok 5 - model direct wins over provider deferred
+  ---
+  duration_ms: 0.117104
+  type: 'test'
+  ...
+# Subtest: model deferred wins over provider direct
+ok 6 - model deferred wins over provider direct
+  ---
+  duration_ms: 0.171975
+  type: 'test'
+  ...
+# Subtest: Cursor provider name is hard-fenced to direct
+ok 7 - Cursor provider name is hard-fenced to direct
+  ---
+  duration_ms: 0.096844
+  type: 'test'
+  ...
+# Subtest: custom Cursor adapter is hard-fenced even under another provider name
+ok 8 - custom Cursor adapter is hard-fenced even under another provider name
+  ---
+  duration_ms: 0.117234
+  type: 'test'
+  ...
+# Subtest: non-Cursor direct mode keeps hosted search independent
+ok 9 - non-Cursor direct mode keeps hosted search independent
+  ---
+  duration_ms: 0.306916
+  type: 'test'
+  ...
+# Subtest: non-Cursor deferred mode pins code mode and search together
+ok 10 - non-Cursor deferred mode pins code mode and search together
+  ---
+  duration_ms: 0.453894
+  type: 'test'
+  ...
+# Subtest: Cursor catalog row never advertises hosted or deferred search
+ok 11 - Cursor catalog row never advertises hosted or deferred search
+  ---
+  duration_ms: 0.20838
+  type: 'test'
+  ...
+# Subtest: invalid override fails loudly in the prototype
+ok 12 - invalid override fails loudly in the prototype
+  ---
+  duration_ms: 0.32988
+  type: 'test'
+  ...
+# Subtest: combo direct mode wins over deferred members
+ok 13 - combo direct mode wins over deferred members
+  ---
+  duration_ms: 0.121831
+  type: 'test'
+  ...
+# Subtest: future resolver prefers local Code Mode
+ok 14 - future resolver prefers local Code Mode
+  ---
+  duration_ms: 0.184104
+  type: 'test'
+  ...
+# Subtest: future resolver chooses verified native tool search only with complete round trip
+ok 15 - future resolver chooses verified native tool search only with complete round trip
+  ---
+  duration_ms: 0.10801
+  type: 'test'
+  ...
+# Subtest: future resolver falls back to proxy meta-tools
+ok 16 - future resolver falls back to proxy meta-tools
+  ---
+  duration_ms: 0.06755
+  type: 'test'
+  ...
+# Subtest: future resolver finally falls back to bounded direct mode
+ok 17 - future resolver finally falls back to bounded direct mode
+  ---
+  duration_ms: 0.052869
+  type: 'test'
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 17
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 60.962763

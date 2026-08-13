@@ -1,0 +1,21 @@
+CHECK src/codex/catalog/tool-discovery.ts
+CHECK tests/codex-tool-discovery-mode.test.ts
+CHECK src/types.ts
+CHECK src/codex/catalog/parsing.ts
+CHECK src/codex/catalog/provider-fetch.ts
+CHECK src/codex/catalog/aggregation.ts
+CHECK src/codex/catalog/sync.ts
+CHECK src/config.ts
+CHECK src/codex/catalog.ts
+draft seams: OK
+ADD   src/codex/catalog/tool-discovery.ts
+ADD   tests/codex-tool-discovery-mode.test.ts
+EDIT  src/types.ts
+EDIT  src/codex/catalog/parsing.ts
+EDIT  src/codex/catalog/provider-fetch.ts
+EDIT  src/codex/catalog/aggregation.ts
+EDIT  src/codex/catalog/sync.ts
+EDIT  src/config.ts
+EDIT  src/codex/catalog.ts
+draft applied; review git diff before testing
+synthetic seam application: PASS

@@ -1,0 +1,288 @@
+diff --git a/src/types.ts b/src/types.ts
+--- a/src/types.ts
++++ b/src/types.ts
+@@ -1,6 +1,9 @@
+ export interface ProviderCostOverlay {
+   input: number;
+   output: number;
+   cacheRead: number;
+   cacheWrite: number;
+ }
++
++/** Catalog policy for MCP/plugin discovery on Codex-routed models. */
++export type OcxRoutedToolDiscoveryMode = "auto" | "deferred" | "direct";
+@@ -12,4 +15,11 @@
+ export interface OcxProviderConfig {
+   adapter: string;
++  /**
++   * Route-wide Codex discovery policy. `auto` preserves the current default:
++   * non-Cursor deferred, Cursor direct.
++   */
++  routedToolDiscovery?: OcxRoutedToolDiscoveryMode;
++  /** Exact/modelRecordValue-compatible per-model override. */
++  modelRoutedToolDiscovery?: Record<string, OcxRoutedToolDiscoveryMode>;
+   /** Cursor MCP compatibility bounds; positive integers when configured. */
+   mcpMaxTools?: number;
+
+diff --git a/src/codex/catalog/tool-discovery.ts b/src/codex/catalog/tool-discovery.ts
+new file mode 100644
+--- /dev/null
++++ b/src/codex/catalog/tool-discovery.ts
+@@ -0,0 +1,65 @@
++import type {
++  OcxProviderConfig,
++  OcxRoutedToolDiscoveryMode,
++} from "../../types";
++import { modelRecordValue } from "../../reasoning-effort";
++
++export type ResolvedRoutedToolDiscoveryMode = "deferred" | "direct";
++
++export interface ResolvedRoutedToolDiscovery {
++  readonly mode: ResolvedRoutedToolDiscoveryMode;
++  readonly source: "cursor-hard-fence" | "model-override" | "provider-override" | "default";
++  readonly configured: OcxRoutedToolDiscoveryMode;
++  readonly warning?: string;
++}
++
++export const ROUTED_TOOL_DISCOVERY_MODES: readonly OcxRoutedToolDiscoveryMode[] = [
++  "auto",
++  "deferred",
++  "direct",
++] as const;
++
++export function resolveRoutedToolDiscoveryMode(
++  providerName: string,
++  provider: Pick<
++    OcxProviderConfig,
++    "adapter" | "routedToolDiscovery" | "modelRoutedToolDiscovery"
++  >,
++  modelId: string,
++): ResolvedRoutedToolDiscovery {
++  const modelConfigured = modelRecordValue(provider.modelRoutedToolDiscovery, modelId);
++  const configured = modelConfigured ?? provider.routedToolDiscovery ?? "auto";
++  const source: ResolvedRoutedToolDiscovery["source"] = modelConfigured !== undefined
++    ? "model-override"
++    : provider.routedToolDiscovery !== undefined
++      ? "provider-override"
++      : "default";
++
++  if (providerName === "cursor" || provider.adapter === "cursor") {
++    return {
++      mode: "direct",
++      source: "cursor-hard-fence",
++      configured,
++      ...(configured === "deferred"
++        ? { warning: "Configured deferred discovery was ignored for Cursor." }
++        : {}),
++    };
++  }
++
++  if (configured === "direct") {
++    return {
++      mode: "direct",
++      source,
++      configured,
++      warning: "Direct discovery may expand the first request with full MCP declarations.",
++    };
++  }
++
++  return { mode: "deferred", source, configured };
++}
++
++export function deriveComboToolDiscoveryMode(
++  memberModes: readonly (ResolvedRoutedToolDiscoveryMode | undefined)[],
++): ResolvedRoutedToolDiscoveryMode {
++  return memberModes.some(mode => mode === "direct") ? "direct" : "deferred";
++}
+
+diff --git a/src/codex/catalog/parsing.ts b/src/codex/catalog/parsing.ts
+--- a/src/codex/catalog/parsing.ts
++++ b/src/codex/catalog/parsing.ts
+@@ -1,1 +1,2 @@
+ import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
++import type { ResolvedRoutedToolDiscoveryMode } from "./tool-discovery";
+@@ -7,2 +8,4 @@
+   /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
+   parallelToolCalls?: boolean;
++  /** Resolved before catalog serialization; `auto` never reaches this layer. */
++  toolDiscoveryMode?: ResolvedRoutedToolDiscoveryMode;
+@@ -14,1 +17,5 @@
+-export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls = false): RawEntry {
++export function normalizeRoutedCatalogEntry(
++  entry: RawEntry,
++  parallelToolCalls = false,
++  toolDiscoveryMode: ResolvedRoutedToolDiscoveryMode = "deferred",
++): RawEntry {
+@@ -20,6 +27,9 @@
+   if (isCursorEntry) {
+     delete entry.web_search_tool_type;
+   } else {
+     entry.web_search_tool_type = "text_and_image";
+   }
+-  entry.supports_search_tool = !isCursorEntry;
++  // Cursor is a hard fence. For every other routed row, an explicit direct
++  // override is a compatibility escape hatch; hosted search stays independent.
++  const effectiveToolDiscoveryMode = isCursorEntry ? "direct" : toolDiscoveryMode;
++  entry.supports_search_tool = effectiveToolDiscoveryMode === "deferred";
+
+diff --git a/src/codex/catalog/provider-fetch.ts b/src/codex/catalog/provider-fetch.ts
+--- a/src/codex/catalog/provider-fetch.ts
++++ b/src/codex/catalog/provider-fetch.ts
+@@ -1,1 +1,2 @@
+ import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
++import { resolveRoutedToolDiscoveryMode } from "./tool-discovery";
+@@ -7,2 +8,2 @@
+ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Record<string, unknown> {
+   return {
+@@ -14,4 +15,6 @@
+     ptc: prov.parallelToolCalls ?? null,
++    routedToolDiscovery: prov.routedToolDiscovery ?? null,
++    modelRoutedToolDiscovery: prov.modelRoutedToolDiscovery ?? null,
+     gMode: prov.googleMode ?? null,
+   };
+ }
+@@ -23,3 +26,2 @@
+ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
+-  void name;
+   const configuredCap = configuredContextWindow(prov, model.id);
+@@ -31,2 +33,3 @@
+   const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
++  const toolDiscovery = resolveRoutedToolDiscoveryMode(name, prov, model.id);
+   const hinted = {
+@@ -38,4 +41,5 @@
+     ...(prov.parallelToolCalls === true || (prov.adapter === "openai-chat" && prov.parallelToolCalls !== false)
+       ? { parallelToolCalls: true }
+       : {}),
++    toolDiscoveryMode: toolDiscovery.mode,
+   };
+
+diff --git a/src/codex/catalog/aggregation.ts b/src/codex/catalog/aggregation.ts
+--- a/src/codex/catalog/aggregation.ts
++++ b/src/codex/catalog/aggregation.ts
+@@ -1,1 +1,2 @@
+ import type { CatalogModel } from "./parsing";
++import { deriveComboToolDiscoveryMode } from "./tool-discovery";
+@@ -7,4 +8,7 @@
+   const defaultReasoningEffort = effectiveComboDefault(
+     combo.defaultEffort,
+     reasoningEfforts,
+   );
++  const toolDiscoveryMode = deriveComboToolDiscoveryMode(
++    members.map(member => member.toolDiscoveryMode),
++  );
+@@ -16,6 +20,7 @@
+     ...(members.every(member => member.parallelToolCalls === true)
+       ? { parallelToolCalls: true }
+       : {}),
++    toolDiscoveryMode,
+     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
+   };
+ }
+@@ -27,2 +32,3 @@
+       parallelToolCalls: member?.parallelToolCalls === true,
++      toolDiscoveryMode: member?.toolDiscoveryMode ?? "deferred",
+       supportsReasoningSummaries: member?.supportsReasoningSummaries !== false,
+
+diff --git a/src/codex/catalog/sync.ts b/src/codex/catalog/sync.ts
+--- a/src/codex/catalog/sync.ts
++++ b/src/codex/catalog/sync.ts
+@@ -1,1 +1,5 @@
+-      normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
++      normalizeRoutedCatalogEntry(
++        e,
++        model?.parallelToolCalls === true,
++        model?.toolDiscoveryMode ?? "deferred",
++      );
+@@ -7,2 +11,5 @@
+   const isCursorFallback = isRouted && model?.provider === "cursor";
++  const fallbackToolDiscoveryMode = isCursorFallback
++    ? "direct"
++    : model?.toolDiscoveryMode ?? "deferred";
+   const entry: RawEntry = {
+@@ -14,6 +21,9 @@
+-    ...(isRouted
+-      ? isCursorFallback
+-        ? { supports_search_tool: false }
+-        : { web_search_tool_type: "text_and_image", supports_search_tool: true }
++    ...(isRouted
++      ? isCursorFallback
++        ? { supports_search_tool: false }
++        : {
++          web_search_tool_type: "text_and_image",
++          supports_search_tool: fallbackToolDiscoveryMode === "deferred",
++        }
+       : {}),
+   };
+
+diff --git a/src/config.ts b/src/config.ts
+--- a/src/config.ts
++++ b/src/config.ts
+@@ -1,1 +1,1 @@
+ const retryOn429PolicySchema = z.object({
+@@ -7,1 +7,3 @@
+ }).strict();
++
++const routedToolDiscoveryModeSchema = z.enum(["auto", "deferred", "direct"]);
+@@ -13,3 +15,9 @@
+ const providerConfigSchema = z.object({
+   adapter: z.string().min(1),
+   baseUrl: z.string().min(1),
++  // Invalid hand edits degrade on load; validateConfigCandidate inspects the
++  // raw candidate first so live writes still reject invalid modes.
++  routedToolDiscovery: routedToolDiscoveryModeSchema.optional().catch(undefined),
++  modelRoutedToolDiscovery: z.record(z.string(), routedToolDiscoveryModeSchema)
++    .optional()
++    .catch(undefined),
+@@ -21,1 +29,32 @@
+ }).passthrough();
++
++function routedToolDiscoveryBoundaryError(value: unknown): string | null {
++  const root = rawConfigRecord(value);
++  if (!root) return null;
++  const providers = root.providers;
++  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return null;
++  const allowed = new Set(["auto", "deferred", "direct"]);
++
++  for (const [providerName, rawProvider] of Object.entries(providers as Record<string, unknown>)) {
++    if (!rawProvider || typeof rawProvider !== "object" || Array.isArray(rawProvider)) continue;
++    const provider = rawProvider as Record<string, unknown>;
++    const mode = provider.routedToolDiscovery;
++    if (mode !== undefined && (typeof mode !== "string" || !allowed.has(mode))) {
++      return `schema_invalid: providers.${redactSecretString(providerName)}.routedToolDiscovery: must be auto, deferred, or direct`;
++    }
++    const modelModes = provider.modelRoutedToolDiscovery;
++    if (modelModes === undefined) continue;
++    if (!modelModes || typeof modelModes !== "object" || Array.isArray(modelModes)) {
++      return `schema_invalid: providers.${redactSecretString(providerName)}.modelRoutedToolDiscovery: must be a plain object`;
++    }
++    for (const [modelId, modelMode] of Object.entries(modelModes as Record<string, unknown>)) {
++      if (!modelId.trim()) {
++        return `schema_invalid: providers.${redactSecretString(providerName)}.modelRoutedToolDiscovery: model ids must be nonblank`;
++      }
++      if (typeof modelMode !== "string" || !allowed.has(modelMode)) {
++        return `schema_invalid: providers.${redactSecretString(providerName)}.modelRoutedToolDiscovery.${redactSecretString(modelId)}: must be auto, deferred, or direct`;
++      }
++    }
++  }
++  return null;
++}
+@@ -27,2 +66,2 @@
+ export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+   const boundaryError = blankHostnameError(value)
+@@ -34,1 +73,2 @@
+-    ?? loopbackListenerPortError(value);
++    ?? loopbackListenerPortError(value)
++    ?? routedToolDiscoveryBoundaryError(value);
+diff --git a/src/codex/catalog.ts b/src/codex/catalog.ts
+--- a/src/codex/catalog.ts
++++ b/src/codex/catalog.ts
+@@ -1,1 +1,9 @@
+ export type { CatalogModel, MultiAgentMode } from "./catalog/parsing";
++export {
++  deriveComboToolDiscoveryMode,
++  resolveRoutedToolDiscoveryMode,
++} from "./catalog/tool-discovery";
++export type {
++  ResolvedRoutedToolDiscovery,
++  ResolvedRoutedToolDiscoveryMode,
++} from "./catalog/tool-discovery";

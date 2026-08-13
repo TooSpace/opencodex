@@ -1,0 +1,77 @@
+diff --git a/tests/codex-tool-discovery-mode.test.ts b/tests/codex-tool-discovery-mode.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/codex-tool-discovery-mode.test.ts
+@@ -0,0 +1,72 @@
++import { describe, expect, test } from "bun:test";
++import {
++  deriveComboToolDiscoveryMode,
++  resolveRoutedToolDiscoveryMode,
++} from "../src/codex/catalog/tool-discovery";
++
++const provider = {
++  adapter: "openai-chat",
++  baseUrl: "https://example.invalid/v1",
++} as const;
++
++describe("routed tool discovery resolver", () => {
++  test("preserves PR #1596 as the non-Cursor default", () => {
++    expect(resolveRoutedToolDiscoveryMode("external", provider, "model")).toMatchObject({
++      mode: "deferred",
++      source: "default",
++      configured: "auto",
++    });
++  });
++
++  test("model override wins provider override", () => {
++    expect(resolveRoutedToolDiscoveryMode("external", {
++      ...provider,
++      routedToolDiscovery: "direct",
++      modelRoutedToolDiscovery: { model: "deferred" },
++    }, "model")).toMatchObject({ mode: "deferred", source: "model-override" });
++  });
++
++  test("direct model override is scoped", () => {
++    const configured = {
++      ...provider,
++      routedToolDiscovery: "deferred" as const,
++      modelRoutedToolDiscovery: { broken: "direct" as const },
++    };
++    expect(resolveRoutedToolDiscoveryMode("external", configured, "broken").mode).toBe("direct");
++    expect(resolveRoutedToolDiscoveryMode("external", configured, "sibling").mode).toBe("deferred");
++  });
++
++  test("Cursor is hard-fenced even when deferred is configured", () => {
++    expect(resolveRoutedToolDiscoveryMode("custom", {
++      ...provider,
++      adapter: "cursor",
++      routedToolDiscovery: "deferred",
++    }, "auto")).toMatchObject({ mode: "direct", source: "cursor-hard-fence" });
++  });
++
++  test("combo direct member wins", () => {
++    expect(deriveComboToolDiscoveryMode(["deferred", "direct"])).toBe("direct");
++    expect(deriveComboToolDiscoveryMode(["deferred", "deferred"])).toBe("deferred");
++  });
++});
++
++// Extend tests/catalog-cursor-search.test.ts with:
++// - non-Cursor provider direct -> search false, hosted search kept
++// - model override scoped to one row
++// - Cursor configured deferred -> still false/no hosted search
++// - template-less fallback parity
++
++// Extend tests/codex-catalog.test.ts with:
++// - combo direct-member composition
++// - bare/slashed combo alias parity
++// - zero-config current-dev behavior
++
++// Extend tests/config.test.ts and tests/config-user-edits.test.ts with:
++// - valid modes
++// - invalid live-write rejection
++// - invalid hand-edit degradation without provider/key loss
++// - model map prototype/accessor safety
++
++// Extend tests/e2e-style/phase100-native-parity.test.ts with:
++// - default DeepSeek row remains supports_search_tool:true
++// - exact DeepSeek model override produces false without changing siblings
