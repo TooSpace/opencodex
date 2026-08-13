@@ -1,15 +1,8 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-} from "node:fs";
+import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labPublicOriginDir } from "../paths";
+import { readPrivateRegularFile } from "./file-safety";
 import {
   cleanupStalePrivateFileStagesInDir,
   isPrivateFileStageName,
@@ -18,7 +11,6 @@ import {
 import { parseStrictPublicJson } from "./strict-json";
 import { PublicEvidenceValidationError } from "./validate";
 
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 const MAX_ORIGINS = 512;
 const MAX_ORIGIN_BYTES = 1024;
 const ORIGIN_RE = /^origin-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
@@ -47,36 +39,32 @@ function originBody(identity: PublicOriginIdentityV1): Buffer {
 }
 
 function readOrigin(path: string, expected?: PublicOriginIdentityV1): PublicOriginIdentityV1 {
-  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-  try {
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_ORIGIN_BYTES) {
-      throw new PublicEvidenceValidationError("public_origin_unsafe", "public origin marker is unsafe");
-    }
-    if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
-      throw new PublicEvidenceValidationError("public_origin_unsafe", "public origin marker permissions must be 0600");
-    }
-    const raw = parseStrictPublicJson(readFileSync(fd), "public origin marker", "public_origin_json");
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new PublicEvidenceValidationError("public_origin_json", "public origin marker must be an object");
-    }
-    const row = raw as Record<string, unknown>;
-    if (Object.keys(row).sort().join(",") !== "bundleId,publisherKeyId,schemaVersion"
-      || row.schemaVersion !== "public_origin_v1"
-      || typeof row.publisherKeyId !== "string"
-      || typeof row.bundleId !== "string"
-      || !/^[0-9a-f]{64}$/.test(row.publisherKeyId)
-      || !/^[0-9a-f]{64}$/.test(row.bundleId)) {
-      throw new PublicEvidenceValidationError("public_origin_json", "public origin marker schema is invalid");
-    }
-    const identity = { publisherKeyId: row.publisherKeyId, bundleId: row.bundleId };
-    if (expected && (identity.publisherKeyId !== expected.publisherKeyId || identity.bundleId !== expected.bundleId)) {
-      throw new PublicEvidenceValidationError("public_origin_conflict", "public origin marker identity mismatch");
-    }
-    return identity;
-  } finally {
-    closeSync(fd);
+  const bytes = readPrivateRegularFile(path, {
+    maxBytes: MAX_ORIGIN_BYTES,
+    errorCode: "public_origin_unsafe",
+    errorMessage: "public origin marker is not a private regular file with 0600 permissions",
+    sizeErrorCode: "public_origin_unsafe",
+    sizeErrorMessage: "public origin marker exceeds its size bound",
+    requireMode600: true,
+  });
+  const raw = parseStrictPublicJson(bytes, "public origin marker", "public_origin_json");
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new PublicEvidenceValidationError("public_origin_json", "public origin marker must be an object");
   }
+  const row = raw as Record<string, unknown>;
+  if (Object.keys(row).sort().join(",") !== "bundleId,publisherKeyId,schemaVersion"
+    || row.schemaVersion !== "public_origin_v1"
+    || typeof row.publisherKeyId !== "string"
+    || typeof row.bundleId !== "string"
+    || !/^[0-9a-f]{64}$/.test(row.publisherKeyId)
+    || !/^[0-9a-f]{64}$/.test(row.bundleId)) {
+    throw new PublicEvidenceValidationError("public_origin_json", "public origin marker schema is invalid");
+  }
+  const identity = { publisherKeyId: row.publisherKeyId, bundleId: row.bundleId };
+  if (expected && (identity.publisherKeyId !== expected.publisherKeyId || identity.bundleId !== expected.bundleId)) {
+    throw new PublicEvidenceValidationError("public_origin_conflict", "public origin marker identity mismatch");
+  }
+  return identity;
 }
 
 function originNames(dir: string): string[] {
@@ -101,7 +89,18 @@ export function recordLocalPublicOrigin(identity: PublicOriginIdentityV1, config
   }
   const bytes = originBody(identity);
   const published = publishPrivateFileExclusive(path, bytes);
-  if (!published.created) readOrigin(path, identity);
+  if (!published.created) {
+    readOrigin(path, identity);
+    return;
+  }
+
+  // The pre-check is intentionally followed by a post-publication check. Separate CLI
+  // processes can both observe one free slot before either publishes. The loser removes
+  // only the marker it created, so the durable directory converges back inside the cap.
+  if (originNames(dir).length > MAX_ORIGINS) {
+    try { unlinkSync(path); } catch { /* preserve the quota failure */ }
+    throw new PublicEvidenceValidationError("public_origin_bound", "public origin marker bound exceeded");
+  }
 }
 
 export function listLocalPublicOrigins(configDir?: string): PublicOriginIdentityV1[] {
