@@ -6,16 +6,51 @@ import {
   linkSync,
   openSync,
   readFileSync,
+  readdirSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 export type PrivateFileCommitFault = "before_publish" | null;
 let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
 
 function cleanup(path: string): void {
   try { unlinkSync(path); } catch { /* absent/already removed */ }
+}
+
+function pidDefinitelyDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+}
+
+function staleTempPrefix(finalPath: string): string {
+  return `.${basename(finalPath)}.`;
+}
+
+function cleanupStaleTemps(finalPath: string): void {
+  const dir = dirname(finalPath);
+  const prefix = staleTempPrefix(finalPath);
+  let changed = false;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+    const rest = name.slice(prefix.length, -4);
+    const pidText = rest.slice(0, rest.indexOf("."));
+    if (!/^\d+$/.test(pidText)) continue;
+    const pid = Number(pidText);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
+    try {
+      unlinkSync(join(dir, name));
+      changed = true;
+    } catch {
+      // Another cleanup or writer may have removed it after enumeration.
+    }
+  }
+  if (changed) fsyncParentBestEffort(finalPath);
 }
 
 function fsyncParentBestEffort(path: string): void {
@@ -43,13 +78,18 @@ function writeAll(fd: number, bytes: Uint8Array): void {
 /**
  * Publish immutable mode-0600 bytes without ever exposing a partially-written final path.
  * The caller owns EEXIST comparison semantics because some objects are idempotent and
- * others are identity conflicts.
+ * others are identity conflicts. Staging files are target-scoped and stale stages from
+ * definitely-dead writers are reclaimed on the next publication attempt.
  */
 export function publishPrivateFileExclusive(
   finalPath: string,
   bytes: Uint8Array,
 ): { created: boolean } {
-  const tempPath = join(dirname(finalPath), `.${randomUUID()}.tmp`);
+  cleanupStaleTemps(finalPath);
+  const tempPath = join(
+    dirname(finalPath),
+    `${staleTempPrefix(finalPath)}${process.pid}.${randomUUID()}.tmp`,
+  );
   let fd: number | null = null;
   try {
     fd = openSync(tempPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
@@ -73,6 +113,7 @@ export function publishPrivateFileExclusive(
   } finally {
     if (fd !== null) closeSync(fd);
     cleanup(tempPath);
+    fsyncParentBestEffort(finalPath);
   }
 }
 
