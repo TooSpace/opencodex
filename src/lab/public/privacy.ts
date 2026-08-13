@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import type {
   PublicEvidenceBundleUnsignedV1,
   PublicEvidenceBundleV1,
@@ -21,6 +22,15 @@ const FORBIDDEN_PUBLIC_STRING_PATTERNS: ReadonlyArray<{ label: string; pattern: 
 ];
 
 function assertPrivacySafeString(value: string, field: string): void {
+  // `PUBLIC_IDENTIFIER` intentionally permits `:` for reviewed identifiers, so the
+  // regex-only scanner cannot safely use a broad colon pattern. Node's IP parser gives
+  // us an exact whole-string IPv4/IPv6 check without rejecting ordinary version names.
+  if (isIP(value) !== 0) {
+    throw new PublicEvidenceValidationError(
+      "privacy_rejected",
+      `${field} contains forbidden IP address material`,
+    );
+  }
   for (const { label, pattern } of FORBIDDEN_PUBLIC_STRING_PATTERNS) {
     if (pattern.test(value)) {
       throw new PublicEvidenceValidationError(
