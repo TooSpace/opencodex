@@ -3,7 +3,6 @@ import {
   chmodSync,
   existsSync,
   linkSync,
-  mkdirSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -171,10 +170,10 @@ test("failed export purge is omitted from the durable tombstone action set", () 
   const home = configDir("ocx-cl10-tombstone-export-");
   const paths = ensureLabDirs(home);
   writeFileSync(join(paths.scratchDir, "scratch.txt"), "scratch", { mode: 0o600 });
-  const blocked = join(paths.exportDir, "blocked");
-  mkdirSync(blocked, { mode: 0o700 });
-  writeFileSync(join(blocked, "bytes.txt"), "sensitive", { mode: 0o600 });
-  chmodSync(blocked, 0o000);
+  writeFileSync(join(paths.exportDir, "sensitive.txt"), "sensitive", { mode: 0o600 });
+  // Deleting a child requires write permission on the parent directory. Keep read and
+  // execute so purge can enumerate the export directory but make unlink fail reliably.
+  chmodSync(paths.exportDir, 0o500);
 
   let failure: unknown;
   try {
@@ -186,7 +185,7 @@ test("failed export purge is omitted from the durable tombstone action set", () 
   } catch (error) {
     failure = error;
   } finally {
-    chmodSync(blocked, 0o700);
+    chmodSync(paths.exportDir, 0o700);
   }
   expect(failure).toBeInstanceOf(Error);
 
