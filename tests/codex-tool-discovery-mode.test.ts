@@ -499,7 +499,9 @@ describe("routed tool-discovery backward compatibility", () => {
             baseUrl: "http://127.0.0.1:1/v1",
             apiKey: "k",
             allowPrivateNetwork: true,
-            modelRoutedToolDiscovery: { "": "direct" },
+            // Whitespace-only, not just empty: `.min(1)` would accept "   " while the write
+            // boundary rejects it as blank, so the warning would claim a drop that never happened.
+            modelRoutedToolDiscovery: { "   ": "direct" },
           },
         },
       };

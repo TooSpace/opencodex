@@ -651,7 +651,13 @@ const providerConfigSchema = z.object({
   // Hand-edited configs degrade instead of losing the whole provider (credentials, ports).
   // The write boundary rejects the same values outright — see routedToolDiscoveryError().
   routedToolDiscovery: routedToolDiscoveryModeSchema.optional().catch(undefined),
-  modelRoutedToolDiscovery: z.record(z.string().min(1), routedToolDiscoveryModeSchema).optional().catch(undefined),
+  // `.min(1)` alone would accept a whitespace-only key, which the write boundary rejects as
+  // blank — the load path must use the SAME nonblank rule or the degrade-warning lies about
+  // what happened to the map.
+  modelRoutedToolDiscovery: z.record(
+    z.string().refine(key => key.trim() !== ""),
+    routedToolDiscoveryModeSchema,
+  ).optional().catch(undefined),
 }).passthrough();
 
 const RESERVED_PROVIDER_NAMES = new Set([
