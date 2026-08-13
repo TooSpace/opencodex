@@ -3,6 +3,7 @@ import type { ObservationEvent, ProtocolSubjectV1 } from "../events/types";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { publicEvidenceId } from "./ids";
 import { validatePublicEvidenceRecordPrivacy } from "./privacy";
+import { publicUtcDay } from "./time";
 import {
   PUBLIC_ADAPTER_FAMILIES,
   type PublicAdapterFamily,
@@ -22,17 +23,6 @@ export interface ProjectPublicEvidenceRecordInput {
   verdict: CompatibilityVerdict;
   incidentRefs?: string[];
   publicArtifactRefs?: string[];
-}
-
-function utcDay(timestampMs: number): string {
-  if (!Number.isInteger(timestampMs) || timestampMs < 0) {
-    throw new PublicEvidenceValidationError("public_selection_time", "invalid observation completion timestamp");
-  }
-  const date = new Date(timestampMs);
-  if (!Number.isFinite(date.getTime())) {
-    throw new PublicEvidenceValidationError("public_selection_time", "invalid observation completion timestamp");
-  }
-  return date.toISOString().slice(0, 10);
 }
 
 function asPublicAdapterFamily(value: string): PublicAdapterFamily | undefined {
@@ -99,7 +89,7 @@ export function projectPublicEvidenceRecord(
       scenarioId: observation.scenarioId,
       scenarioVersion: observation.scenarioVersion,
       verdict: input.verdict,
-      observedDayUtc: utcDay(observation.completedAt),
+      observedDayUtc: publicUtcDay(observation.completedAt),
       subject,
       assertions: observation.assertions.map((assertion) => ({
         id: assertion.id,
