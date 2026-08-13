@@ -2258,18 +2258,23 @@ const ROUTED_TOOL_DISCOVERY_EXPECTED = "must be auto, deferred, or direct";
  * reads them: a validator that touches `candidate.providers[x].modelRoutedToolDiscovery`
  * and only then checks for getters has already run attacker-supplied code.
  *
- * `absent` and `accessor` are distinguished deliberately. Collapsing both to `undefined`
- * makes a getter-backed field look like a missing field, so the validator waves it through
- * and Zod invokes the getter moments later — the exact bypass this helper exists to stop.
+ * The three results are distinguished deliberately. Collapsing any of them to `undefined`
+ * makes a getter-backed or prototype-sourced field look like a missing field, so the
+ * validator waves it through and Zod invokes the getter (or copies the inherited value)
+ * moments later — the exact bypass this helper exists to stop. `inherited` covers a key
+ * reachable only through the prototype chain, whose descriptor is not own.
  */
 type OwnDataProperty =
   | { readonly kind: "absent" }
   | { readonly kind: "accessor" }
+  | { readonly kind: "inherited" }
   | { readonly kind: "data"; readonly value: unknown };
 
 function ownDataProperty(target: object, key: string): OwnDataProperty {
   const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  if (!descriptor) return { kind: "absent" };
+  // `in` walks the prototype chain WITHOUT reading, so an inherited accessor is classified
+  // rather than invoked.
+  if (!descriptor) return key in target ? { kind: "inherited" } : { kind: "absent" };
   if (!("value" in descriptor)) return { kind: "accessor" };
   return { kind: "data", value: descriptor.value };
 }
@@ -2286,7 +2291,7 @@ function routedToolDiscoveryError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
   const providersProperty = ownDataProperty(raw, "providers");
-  if (providersProperty.kind === "accessor") {
+  if (providersProperty.kind === "accessor" || providersProperty.kind === "inherited") {
     return "schema_invalid: providers: must be a plain object";
   }
   const providers = providersProperty.kind === "data" ? providersProperty.value : undefined;
@@ -2294,14 +2299,14 @@ function routedToolDiscoveryError(value: unknown): string | null {
 
   for (const name of Object.getOwnPropertyNames(providers)) {
     const providerProperty = ownDataProperty(providers, name);
-    if (providerProperty.kind === "accessor") {
+    if (providerProperty.kind === "accessor" || providerProperty.kind === "inherited") {
       return `schema_invalid: providers.${name}: must be a plain object`;
     }
     const provider = providerProperty.kind === "data" ? providerProperty.value : undefined;
     if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
 
     const modeProperty = ownDataProperty(provider, "routedToolDiscovery");
-    if (modeProperty.kind === "accessor") {
+    if (modeProperty.kind === "accessor" || modeProperty.kind === "inherited") {
       return `schema_invalid: providers.${name}.routedToolDiscovery: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
     }
     if (modeProperty.kind === "data"
@@ -2311,7 +2316,7 @@ function routedToolDiscoveryError(value: unknown): string | null {
     }
 
     const mapProperty = ownDataProperty(provider, "modelRoutedToolDiscovery");
-    if (mapProperty.kind === "accessor") {
+    if (mapProperty.kind === "accessor" || mapProperty.kind === "inherited") {
       return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: must be a plain object of model overrides`;
     }
     if (mapProperty.kind === "absent") continue;

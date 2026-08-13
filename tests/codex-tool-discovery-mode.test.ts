@@ -336,11 +336,48 @@ describe("routed tool-discovery config admission", () => {
     expect(mapCalls).toBe(0);
   });
 
-  it("ignores a prototype-sourced value rather than trusting it", () => {
-    const polluted = Object.create({ routedToolDiscovery: "eager" }) as Record<string, unknown>;
+  it("rejects a prototype-inherited value even when it is otherwise valid", () => {
+    // An INVALID inherited value is a weak test: Zod's .catch(undefined) would discard it and
+    // the candidate would pass for the wrong reason. A VALID inherited value is the real
+    // case — without an explicit check it gets copied into the admitted config.
+    const polluted = Object.create({ routedToolDiscovery: "direct" }) as Record<string, unknown>;
     polluted.adapter = "openai-responses";
     polluted.baseUrl = "https://example.invalid";
-    // Inherited, so it is not an own data property and must not be read as configuration.
-    expect(validateConfigCandidate({ defaultProvider: "deepseek", providers: { deepseek: polluted } }).ok).toBe(true);
+    expect(validateConfigCandidate({ defaultProvider: "deepseek", providers: { deepseek: polluted } }).ok).toBe(false);
+  });
+
+  it("rejects a prototype-inherited getter without invoking it", () => {
+    let getterCalls = 0;
+    const proto = {};
+    Object.defineProperty(proto, "routedToolDiscovery", {
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        return "direct";
+      },
+    });
+    const polluted = Object.create(proto) as Record<string, unknown>;
+    polluted.adapter = "openai-responses";
+    polluted.baseUrl = "https://example.invalid";
+    const result = validateConfigCandidate({ defaultProvider: "deepseek", providers: { deepseek: polluted } });
+    expect(result.ok).toBe(false);
+    // `in` walks the prototype chain without reading, so the getter must never run.
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects an inherited providers map without invoking its getter", () => {
+    let getterCalls = 0;
+    const proto = {};
+    Object.defineProperty(proto, "providers", {
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        return { deepseek: { adapter: "openai-responses", baseUrl: "https://example.invalid" } };
+      },
+    });
+    const root = Object.create(proto) as Record<string, unknown>;
+    root.defaultProvider = "deepseek";
+    expect(validateConfigCandidate(root).ok).toBe(false);
+    expect(getterCalls).toBe(0);
   });
 });

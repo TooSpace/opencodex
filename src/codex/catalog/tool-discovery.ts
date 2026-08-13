@@ -75,8 +75,16 @@ export interface CursorRouteSignals {
  * canonical provider is `combo` was classified differently depending on whether a template
  * happened to exist (unresolved P2 on PR #1596). Any single-signal reconciliation would
  * silently UNFENCE rows that one path used to fence, and an under-fenced Cursor row
- * advertises a deferred surface its transport cannot serve. Over-fencing only costs
- * payload, so the union is the safe direction.
+ * advertises a deferred surface its transport cannot serve.
+ *
+ * The union is therefore the compatibility-preserving direction: it keeps every result the
+ * template path already produced. It is not free — combo aliases may legally carry one
+ * slash and only `combo/` is reserved, so a combo aliased `cursor/<name>` is routed by the
+ * combo subsystem yet still gets fenced, losing hosted-search metadata and taking Cursor's
+ * parallel-tool advertisement, not merely paying payload. That row's fenced shape is
+ * exactly what shipped before this change, so this preserves behavior rather than
+ * regressing it. The real fix is to reserve the `cursor/` alias prefix (or move to an
+ * authoritative route identity) as a deliberate, documented compatibility break.
  *
  * `cursorRoute` carries the resolver's verdict (provider name or adapter), which is the only
  * signal that catches a Cursor-adapter gateway under a custom provider name.
