@@ -117,7 +117,7 @@ function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): voi
         if (text[index] !== '"') invalid("public JSON object key must be a string");
         const key = parseStringToken();
         if (keys.has(key)) {
-          throw new PublicEvidenceValidationError("duplicate_json_key", `duplicate JSON object key: ${key}`);
+          throw new PublicEvidenceValidationError("duplicate_json_key", "duplicate JSON object key");
         }
         keys.add(key);
         skipWhitespace();
