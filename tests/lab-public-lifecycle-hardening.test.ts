@@ -17,16 +17,18 @@ import {
   labPublicPublisherKeyPath,
 } from "../src/lab/paths";
 import {
+  publishPrivateFileExclusive,
+  setPrivateFileCommitFaultForTests,
+} from "../src/lab/public/private-file";
+import {
   createPublicEvidenceRevocation,
   importCommunityEvidenceBundle,
   importCommunityEvidenceRevocation,
   listCommunityEvidence,
   listLocalPublicOrigins,
-  publishPrivateFileExclusive,
   purgeLocalPublicEvidenceCopies,
   publicEvidenceId,
   recordLocalPublicOrigin,
-  setPrivateFileCommitFaultForTests,
   signPublicEvidenceBundle,
   writePublicEvidenceBundle,
   type PublicEvidenceRecordV1,
