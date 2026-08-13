@@ -34,6 +34,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 import { NATIVE_OPENAI_CONTEXT_OVERRIDES, SUPPORTED_NATIVE_OPENAI_SLUGS, UPSTREAM_NATIVE_ENTRIES, nativeMultiAgentVersion } from "./metadata";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
 import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
+import { isCursorRoute, type ResolvedRoutedToolDiscoveryMode } from "./tool-discovery";
 
 export function legacyCatalogBackupPath(): string {
   return join(getConfigDir(), "catalog-backup.json");
@@ -116,6 +117,13 @@ export interface CatalogModel {
   inputModalities?: string[];
   /** Provider opted into parallel tool calls (OcxProviderConfig.parallelToolCalls). */
   parallelToolCalls?: boolean;
+  /**
+   * Resolved routed tool-discovery policy (OcxProviderConfig.routedToolDiscovery and its
+   * per-model map). Only ever `deferred` or `direct` — `auto` is resolved before it
+   * reaches a catalog row. Carried here so `normalizeRoutedCatalogEntry` never reaches
+   * back into global config, matching how parallelToolCalls and the modality hints flow.
+   */
+  toolDiscoveryMode?: ResolvedRoutedToolDiscoveryMode;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
   supportsReasoningSummaries?: boolean;
@@ -378,7 +386,23 @@ export function applyMultiAgentMode(entries: RawEntry[], mode: MultiAgentMode, v
   return entries;
 }
 
-export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls = false): RawEntry {
+/**
+ * Route-scoped policy inputs. An options object rather than a third positional argument:
+ * the Cursor fence needs the provider identity as well as the mode, and the two existing
+ * positions stay put for the public callers (src/codex/catalog.ts re-export, tests).
+ */
+export interface RoutedCatalogEntryOptions {
+  /** Resolved discovery mode for this row. Defaults to `deferred` (the #1596 default). */
+  toolDiscoveryMode?: ResolvedRoutedToolDiscoveryMode;
+  /** Canonical provider id from the CatalogModel, when the caller has one. */
+  providerId?: string;
+}
+
+export function normalizeRoutedCatalogEntry(
+  entry: RawEntry,
+  parallelToolCalls = false,
+  options: RoutedCatalogEntryOptions = {},
+): RawEntry {
   delete entry.model_messages;
   delete entry.tool_mode;
   applyRoutedCodexToolMode(entry);
@@ -392,7 +416,9 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   // Routed rows cloned from native templates must not inherit OpenAI-only summary delivery.
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
-  const isCursorEntry = typeof entry.slug === "string" && entry.slug.startsWith("cursor/");
+  // Provider identity first, slug prefix only as a fallback — one shared fence for both the
+  // template and template-less paths (see tool-discovery.ts isCursorRoute).
+  const isCursorEntry = isCursorRoute(entry.slug, options.providerId);
   // `supports_search_tool` selects Codex's deferred tool-discovery surface; it is not the hosted
   // web-search capability. Routed rows also carry tool_mode=code_mode_only (below), and under code
   // mode DEFERRED MCP tools remain callable through exec's `tools` global / ALL_TOOLS without any
@@ -408,7 +434,12 @@ export function normalizeRoutedCatalogEntry(entry: RawEntry, parallelToolCalls =
   } else {
     entry.web_search_tool_type = "text_and_image";
   }
-  entry.supports_search_tool = !isCursorEntry;
+  // Cursor is hard-fenced to direct; every other routed row follows its resolved mode,
+  // which defaults to deferred so an unconfigured tree is byte-identical to #1596.
+  const effectiveMode: ResolvedRoutedToolDiscoveryMode = isCursorEntry
+    ? "direct"
+    : options.toolDiscoveryMode ?? "deferred";
+  entry.supports_search_tool = effectiveMode === "deferred";
   // Cursor's transport already serializes overlapping tool calls into atomic Responses tool events.
   // Advertising parallel calls lets Codex send the same native capability bit it sends for OpenAI.
   // Opt-in providers (OcxProviderConfig.parallelToolCalls, e.g. xAI) advertise it too: the

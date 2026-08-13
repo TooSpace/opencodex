@@ -940,6 +940,13 @@ export interface OcxConfig {
 
 export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-first";
 
+/**
+ * Routed-row Codex tool-discovery policy. `auto` resolves to `deferred` for non-Cursor
+ * routed rows and `direct` for Cursor; the resolved catalog value is only ever
+ * `deferred` or `direct`.
+ */
+export type OcxRoutedToolDiscoveryMode = "auto" | "deferred" | "direct";
+
 export type OcxComboStrategy = "failover" | "round-robin";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
@@ -1450,6 +1457,23 @@ export interface OcxProviderConfig {
    * only on explicit `true`. See devlog/_plan/260709_parallel_tool_calls.
    */
   parallelToolCalls?: boolean;
+  /**
+   * Codex routed-row tool-discovery policy. `auto` (default) keeps the shipped behavior:
+   * deferred for non-Cursor routed rows, direct for Cursor. Set `direct` only for a route
+   * PROVEN incompatible with deferred discovery — it embeds every MCP declaration in the
+   * first request (a measured 2.7x turn-1 payload cost) and does NOT make an otherwise
+   * eligible tool reachable under code mode, where upstream installs nested tools on the
+   * `tools`/`ALL_TOOLS` globals either way. See
+   * devlog/_plan/260813_routed_tool_discovery_profiles.
+   */
+  routedToolDiscovery?: OcxRoutedToolDiscoveryMode;
+  /**
+   * Per-model routed tool-discovery override; wins over the provider-level value so one
+   * incompatible model on a mixed gateway does not penalize its siblings. Keys follow
+   * `modelRecordValue()` matching (exact id, family before `:`, case-insensitive full id);
+   * dated `-YYYYMMDD` variants are NOT matched, so name the exact failing model id.
+   */
+  modelRoutedToolDiscovery?: Record<string, OcxRoutedToolDiscoveryMode>;
   /**
    * Opt-in: forward `prompt_cache_key` to the upstream `/chat/completions` body.
    * OpenAI-specific extension; strict backends (Groq, Cerebras, etc.) reject unknown

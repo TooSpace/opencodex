@@ -34,6 +34,7 @@ import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../accou
 
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, CODEX_PROVIDER_MODEL_CATALOG_KIND, activeCodexModelsCachePath, applyCatalogMetadata, applyMultiAgentMode, applyNativeOpenAiContextOverride, applyRoutedCodexToolMode, catalogBackupPathFor, catalogHasRoutedEntries, catalogModelSlug, ensureStrictCatalogFields, findNativeTemplate, isDefaultCatalogPath, isRoutedModelCompatibilityExcluded, legacyCatalogBackupPath, normalizeRoutedCatalogEntry, normalizeServiceTiers, readCatalog, readCatalogBackup, readCodexCatalogPath, readNativeBaseline } from "./parsing";
+import { isCursorRoute } from "./tool-discovery";
 import type { CatalogModel, MultiAgentMode, RawCatalog, RawEntry } from "./parsing";
 import { accountBoundNativeOpenAiSlugs, accountBoundNativeOpenAiSlugsBySelector, applyNativeVisibility, CODEX_NATIVE_ALIAS_CATALOG_KIND, desktopAllowlistSuppressedNativeSlugs, disabledNativeSlugs, isNativeAliasCatalogEntry, isUnsupportedOpenAiNativeSlug, NATIVE_OPENAI_MODELS, observedAccountBoundNativeEntries, shouldIncludeAccountBoundNativeOpenAi, shouldIncludeNativeOpenAi, shouldUpgradeToUpstreamEntry, SUPPORTED_NATIVE_OPENAI_SLUGS, upstreamNativeEntry } from "./metadata";
 import {
@@ -284,7 +285,10 @@ export function deriveEntry(
         e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
       }
       applyReasoningLevels(e, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExact);
-      normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true);
+      normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true, {
+        toolDiscoveryMode: model?.toolDiscoveryMode,
+        providerId: model?.provider,
+      });
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
       if (model?.catalogKind) e.opencodex_catalog_kind = model.catalogKind;
@@ -314,7 +318,14 @@ export function deriveEntry(
   // web-search metadata (runTurn transport bypasses the sidecar). Non-Cursor routed fallbacks
   // advertise deferred discovery — code mode keeps deferred MCP callable (devlog
   // 260813_tool_catalog_deferral/010+020); search=false costs a measured 2.7x turn-1 payload.
-  const isCursorFallback = isRouted && model?.provider === "cursor";
+  // Same fence helper as the template path, so a `cursor/`-aliased combo whose canonical
+  // provider is `combo` cannot be classified one way here and another way there.
+  const isCursorFallback = isRouted && isCursorRoute(slug, model?.provider);
+  // Cursor is hard-fenced to direct; every other routed fallback follows its resolved mode,
+  // defaulting to deferred so an unconfigured tree stays byte-identical to #1596.
+  const fallbackDiscoveryMode = isCursorFallback
+    ? "direct"
+    : model?.toolDiscoveryMode ?? "deferred";
   const entry: RawEntry = {
     slug, display_name: routedDisplayName(slug), description: desc,
     shell_type: "shell_command", visibility: "list", supported_in_api: true,
@@ -322,7 +333,10 @@ export function deriveEntry(
     ...(isRouted
       ? isCursorFallback
         ? { supports_search_tool: false }
-        : { web_search_tool_type: "text_and_image", supports_search_tool: true }
+        : {
+          web_search_tool_type: "text_and_image",
+          supports_search_tool: fallbackDiscoveryMode === "deferred",
+        }
       : {}),
   };
   if (isRouted) {

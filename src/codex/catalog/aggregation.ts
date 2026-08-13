@@ -34,6 +34,7 @@ import upstreamModelsSnapshot from "../data/upstream-models.json";
 
 import { catalogModelSlug } from "./parsing";
 import type { CatalogModel } from "./parsing";
+import { deriveComboToolDiscoveryMode } from "./tool-discovery";
 
 export const openAiApiCollisionWarnings = new Set<string>();
 
@@ -173,6 +174,13 @@ export function deriveComboCatalogModel(
     ...(members.every(member => member.parallelToolCalls === true)
       ? { parallelToolCalls: true }
       : {}),
+    // One public combo row cannot change capabilities after a target is selected, so a
+    // single direct-only member forces the whole combo direct rather than stranding it.
+    // Emitted only when it departs from the default, matching parallelToolCalls and the
+    // summary flag: an all-deferred combo stays byte-identical to the pre-override shape.
+    ...(deriveComboToolDiscoveryMode(members.map(member => member.toolDiscoveryMode)) === "direct"
+      ? { toolDiscoveryMode: "direct" as const }
+      : {}),
     ...(members.some(member => member.supportsReasoningSummaries === false) ? { supportsReasoningSummaries: false } : {}),
   };
 }
@@ -201,6 +209,7 @@ export function comboCatalogWarningSignature(
       inputModalities: [...new Set(member?.inputModalities ?? [])].sort(),
       reasoningEfforts: [...new Set(member?.reasoningEfforts ?? [])].sort(),
       parallelToolCalls: member?.parallelToolCalls === true,
+      toolDiscoveryMode: member?.toolDiscoveryMode ?? "deferred",
       supportsReasoningSummaries: member?.supportsReasoningSummaries !== false,
     };
   }).sort((a, b) => a.key.localeCompare(b.key)));

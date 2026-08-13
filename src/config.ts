@@ -28,6 +28,9 @@ import {
   MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET,
 } from "./codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "./codex/account-priority";
+// Safe import direction: tool-discovery.ts depends only on ./types and ./reasoning-effort,
+// never on this module, so the policy predicate is shared rather than duplicated here.
+import { isRoutedToolDiscoveryMode } from "./codex/catalog/tool-discovery";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "./codex/upstream-host-health";
 import {
   adoptCustomModelCatalogMigration,
@@ -613,6 +616,9 @@ const retryOn429PolicySchema = z.object({
   respectRetryAfter: z.boolean().optional(),
 }).strict();
 
+/** Routed-row Codex tool-discovery policy; `auto` keeps the shipped per-surface default. */
+const routedToolDiscoveryModeSchema = z.enum(["auto", "deferred", "direct"]);
+
 /**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
@@ -642,6 +648,10 @@ const providerConfigSchema = z.object({
     repairInvalidIds: z.boolean().optional(),
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
+  // Hand-edited configs degrade instead of losing the whole provider (credentials, ports).
+  // The write boundary rejects the same values outright — see routedToolDiscoveryError().
+  routedToolDiscovery: routedToolDiscoveryModeSchema.optional().catch(undefined),
+  modelRoutedToolDiscovery: z.record(z.string().min(1), routedToolDiscoveryModeSchema).optional().catch(undefined),
 }).passthrough();
 
 const RESERVED_PROVIDER_NAMES = new Set([
@@ -2239,6 +2249,67 @@ function googleAntigravityStaticCatalogVersionError(value: unknown): string | nu
   return "schema_invalid: googleAntigravityStaticCatalogVersion: must be 1, 2, or omitted";
 }
 
+const ROUTED_TOOL_DISCOVERY_EXPECTED = "must be auto, deferred, or direct";
+
+/**
+ * Read an own DATA property without triggering a getter.
+ *
+ * The write boundary must reject accessor- and prototype-polluted candidates BEFORE it
+ * reads them: a validator that touches `candidate.providers[x].modelRoutedToolDiscovery`
+ * and only then checks for getters has already run attacker-supplied code. Returns
+ * `undefined` for inherited keys and for anything that is not a plain data property.
+ */
+function ownDataProperty(target: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  if (!descriptor || !("value" in descriptor)) return undefined;
+  return descriptor.value;
+}
+
+/**
+ * Reject malformed routed tool-discovery policy at the write boundary.
+ *
+ * The load path degrades these fields with `.catch(undefined)` so a typo cannot cost a user
+ * their providers or credentials. That same tolerance would silently discard a deliberate
+ * write, so live writes must fail loudly instead — the pattern already used by
+ * `activeCodexAccountPinned`.
+ */
+function routedToolDiscoveryError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw) return null;
+  const providers = ownDataProperty(raw, "providers");
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return null;
+
+  for (const name of Object.getOwnPropertyNames(providers)) {
+    const provider = ownDataProperty(providers, name);
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+
+    const mode = ownDataProperty(provider, "routedToolDiscovery");
+    if (mode !== undefined && !isRoutedToolDiscoveryMode(mode)) {
+      return `schema_invalid: providers.${name}.routedToolDiscovery: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
+    }
+
+    if (!Object.hasOwn(provider, "modelRoutedToolDiscovery")) continue;
+    const map = ownDataProperty(provider, "modelRoutedToolDiscovery");
+    if (map === undefined) {
+      // Present but not a plain data property: an accessor or prototype-sourced value.
+      return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: must be a plain object of model overrides`;
+    }
+    if (typeof map !== "object" || map === null || Array.isArray(map)) {
+      return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: must be a plain object of model overrides`;
+    }
+    for (const modelId of Object.getOwnPropertyNames(map)) {
+      if (modelId.trim() === "") {
+        return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: model keys must be nonblank`;
+      }
+      const modelMode = ownDataProperty(map, modelId);
+      if (!isRoutedToolDiscoveryMode(modelMode)) {
+        return `schema_invalid: providers.${name}.modelRoutedToolDiscovery.${modelId}: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
+      }
+    }
+  }
+  return null;
+}
+
 function codexAccountPickerEnabledError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
@@ -2304,6 +2375,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
     ?? codexAccountPickerEnabledError(value)
+    ?? routedToolDiscoveryError(value)
     ?? loopbackListenerPortError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

@@ -157,8 +157,32 @@ deferred MCP tools remain callable through exec's `tools` global / `ALL_TOOLS` w
 kimi/k3 executed `tools.mcp__node_repl__js`, devlog `260813_tool_catalog_deferral/010+020`).
 Stamping `false` instead forces every MCP declaration into `exec.description` — a measured 2.7x
 turn-1 payload regression (96,699 → 258,929 chars). Non-Cursor routed rows independently keep
-`web_search_tool_type: "text_and_image"` for the OpenCodex search sidecar; Cursor advertises
-neither flag because its runTurn transport bypasses that sidecar and has no proven deferred path.
+`web_search_tool_type: "text_and_image"` for the OpenCodex search sidecar. Cursor rows emit
+`supports_search_tool: false` and omit `web_search_tool_type`, because its runTurn transport
+bypasses that sidecar and has no proven deferred path — the row carries the discovery flag as
+`false` rather than omitting it.
+
+That per-surface default is now the `auto` case of a resolved policy rather than a hard-coded
+boolean. `OcxProviderConfig.routedToolDiscovery` and its per-model map
+`modelRoutedToolDiscovery` let one proven-incompatible route opt into `direct` without moving
+any sibling; `auto` reproduces the shipped shape byte-for-byte. Resolution happens once in
+`applyProviderConfigHints()` and rides `CatalogModel.toolDiscoveryMode`, so configured,
+live-discovered, cached and combo-derived rows agree, and `auto` never reaches serialization.
+Precedence is Cursor hard fence > model override > provider override > auto; a combo resolves
+conservatively, since one public row cannot vary after target selection.
+
+Both catalog construction paths share one Cursor fence (`isCursorRoute()`): provider identity
+decides, and the `cursor/` slug prefix is only a fallback for callers with no `CatalogModel`.
+Before that helper the template path tested the slug while the template-less path tested the
+provider, so a `cursor/`-aliased combo whose canonical provider is `combo` was classified
+differently depending on whether a template existed — discovery mode and payload size varied
+with template availability (unresolved P2 on #1596).
+
+Scope of the reachability claim: it holds for an ELIGIBLE MCP tool. `direct_only_tool_namespaces`,
+`excluded_tool_namespaces`, and MCP/App policy filtering remove tools independently of this flag,
+and no override repairs them. So `direct` is a comprehension/compatibility lever with a payload
+cost, not a reachability fix. Analysis and citations:
+`devlog/_plan/260813_routed_tool_discovery_profiles/094_landing_verification_pass.md`.
 
 [Decision Log]
 - 목적과 의도: keep routed plugin/MCP tools reachable without paying the full-catalog turn-1 payload tax.

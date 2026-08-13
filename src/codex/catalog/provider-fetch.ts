@@ -69,6 +69,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
+import { resolveConfiguredRoutedToolDiscoveryMode } from "./tool-discovery";
 import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
@@ -554,6 +555,8 @@ function providerCatalogFingerprint(name: string, prov: OcxProviderConfig): Reco
     rsDel: prov.modelReasoningSummaryDelivery ?? null,
     noVis: [...(prov.noVisionModels ?? [])].sort(),
     ptc: prov.parallelToolCalls ?? null,
+    rtd: prov.routedToolDiscovery ?? null,
+    mrtd: prov.modelRoutedToolDiscovery ?? null,
     gMode: prov.googleMode ?? null,
   };
 }
@@ -608,7 +611,6 @@ function configuredReasoningSummarySupport(prov: OcxProviderConfig | undefined, 
 }
 
 export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, model: CatalogModel, providerCap?: number): CatalogModel {
-  void name;
   const configuredCap = configuredContextWindow(prov, model.id);
   const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
   let inputModalities = configuredInputModalities(prov, model.id);
@@ -649,6 +651,9 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     ...(prov.parallelToolCalls === true || (prov.adapter === "openai-chat" && prov.parallelToolCalls !== false)
       ? { parallelToolCalls: true }
       : {}),
+    // Resolve routed discovery here so configured, live-discovered, cached and combo-derived
+    // rows all carry the same value and `auto` never reaches serialization.
+    toolDiscoveryMode: resolveConfiguredRoutedToolDiscoveryMode(name, prov, model.id).mode,
   };
   const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
   if (providerCap !== undefined && capped !== hinted.contextWindow) {
