@@ -1,0 +1,178 @@
+import { createPrivateKey, createPublicKey } from "node:crypto";
+import { readdirSync, rmSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
+import {
+  ensureLabDirs,
+  labCommunityDir,
+  labExportDir,
+  labPublicPublisherKeyPath,
+} from "../paths";
+import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
+import { publicEvidenceId } from "./ids";
+import { clearLocalPublicOrigins, listLocalPublicOrigins } from "./origin";
+import { publicEvidencePurgeFaultForTests } from "./purge-test-fault";
+import { readPublicEvidenceBundle } from "./storage";
+import { parseStrictPublicJson } from "./strict-json";
+
+const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
+const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
+const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
+const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
+const COMMUNITY_REVOCATION_RE = /^revocation-([0-9a-f]{64})\.json$/;
+
+/**
+ * Publisher provenance is useful only for classifying local community copies. A corrupt
+ * key must never block deletion of sensitive exports, so classification fails closed to
+ * "unknown publisher" while the purge continues.
+ */
+function readExistingPublisherKeyId(configDir?: string): string | null {
+  const path = labPublicPublisherKeyPath(configDir);
+  try {
+    const pem = readPrivateRegularFile(path, {
+      maxBytes: MAX_PRIVATE_KEY_BYTES,
+      errorCode: "public_publisher_key_unsafe",
+      errorMessage: "public publisher key is unsafe during purge",
+      requireMode600: true,
+    }).toString("utf8");
+    if (!pem.includes("BEGIN PRIVATE KEY")) return null;
+    const privateKey = createPrivateKey(pem);
+    if (privateKey.asymmetricKeyType !== "ed25519") return null;
+    const publicKey = createPublicKey(pem);
+    const publicKeyDer = publicKey.export({ type: "spki", format: "der" }).toString("base64");
+    return publicEvidenceId("publisher_key", { algorithm: "ed25519", publicKey: publicKeyDer });
+  } catch {
+    return null;
+  }
+}
+
+function publicIdentity(publisherKeyId: string, bundleId: string): string {
+  return `${publisherKeyId}:${bundleId}`;
+}
+
+/** Best-effort legacy classification only. Malformed exports are still deleted below. */
+function localExportIdentities(configDir?: string): Set<string> {
+  const identities = new Set<string>();
+  for (const entry of readdirSync(labExportDir(configDir), { withFileTypes: true })) {
+    const match = EXPORT_FILE_RE.exec(entry.name);
+    if (!match) continue;
+    try {
+      const bundle = readPublicEvidenceBundle(match[1]!, configDir);
+      identities.add(publicIdentity(bundle.publisher.keyId, bundle.bundleId));
+    } catch {
+      // Durable origin markers are the primary provenance source. Never retain a
+      // malformed export merely because legacy recovery can no longer parse it.
+    }
+  }
+  return identities;
+}
+
+function purgeAllExports(configDir?: string): number {
+  if (publicEvidencePurgeFaultForTests() === "before_export_delete") {
+    throw new Error("synthetic public export purge failure");
+  }
+  let deleted = 0;
+  const exportDir = labExportDir(configDir);
+  for (const entry of readdirSync(exportDir, { withFileTypes: true })) {
+    rmSync(join(exportDir, entry.name), { recursive: entry.isDirectory(), force: true });
+    deleted += 1;
+  }
+  return deleted;
+}
+
+/** Optional public community cleanup must never turn a completed export deletion into failure. */
+function unlinkLocalCommunityFile(path: string): boolean {
+  try {
+    privateRegularFileSize(path, {
+      maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+      errorCode: "community_unsafe_target",
+      errorMessage: "community object is unsafe during purge",
+    });
+  } catch {
+    return false;
+  }
+  try {
+    unlinkSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+function communityObjectPublisherKeyId(path: string): string | null {
+  try {
+    const raw = parseStrictPublicJson(
+      readPrivateRegularFile(path, {
+        maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+        errorCode: "community_unsafe_target",
+        errorMessage: "community object is unsafe during purge",
+      }),
+      "community object during purge",
+    );
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const publisher = (raw as { publisher?: unknown }).publisher;
+    if (!publisher || typeof publisher !== "object" || Array.isArray(publisher)) return null;
+    const keyId = (publisher as { keyId?: unknown }).keyId;
+    return typeof keyId === "string" && /^[0-9a-f]{64}$/.test(keyId) ? keyId : null;
+  } catch {
+    return null;
+  }
+}
+
+export function purgeLocalPublicEvidenceCopies(configDir?: string): {
+  deletedExports: number;
+  deletedCommunityBundles: number;
+  deletedCommunityRevocations: number;
+} {
+  ensureLabDirs(configDir);
+
+  const exportedIdentities = localExportIdentities(configDir);
+  const localPublisherKeyIds = new Set<string>();
+  try {
+    for (const origin of listLocalPublicOrigins(configDir)) {
+      exportedIdentities.add(publicIdentity(origin.publisherKeyId, origin.bundleId));
+      localPublisherKeyIds.add(origin.publisherKeyId);
+    }
+  } catch {
+    // Provenance corruption must never retain the mandatory sensitive export bytes.
+    // Legacy export identity and the current publisher key still provide best-effort
+    // classification for public community cleanup below.
+  }
+  const currentPublisherKeyId = readExistingPublisherKeyId(configDir);
+  if (currentPublisherKeyId) localPublisherKeyIds.add(currentPublisherKeyId);
+  const communityDir = labCommunityDir(configDir);
+
+  // Sensitive local exports are the mandatory deletion target. Provenance is captured
+  // before this point, so cleanup remains possible even after the export bytes disappear.
+  const deletedExports = purgeAllExports(configDir);
+
+  let deletedCommunityBundles = 0;
+  let deletedCommunityRevocations = 0;
+  for (const entry of readdirSync(communityDir, { withFileTypes: true })) {
+    const bundleMatch = COMMUNITY_BUNDLE_RE.exec(entry.name);
+    if (bundleMatch) {
+      const publisherKeyId = bundleMatch[1]!;
+      const bundleId = bundleMatch[2]!;
+      const locallyOriginated = exportedIdentities.has(publicIdentity(publisherKeyId, bundleId))
+        || localPublisherKeyIds.has(publisherKeyId);
+      if (locallyOriginated && unlinkLocalCommunityFile(join(communityDir, entry.name))) {
+        deletedCommunityBundles += 1;
+      }
+      continue;
+    }
+
+    if (COMMUNITY_REVOCATION_RE.test(entry.name)) {
+      const path = join(communityDir, entry.name);
+      const publisherKeyId = communityObjectPublisherKeyId(path);
+      if (publisherKeyId && localPublisherKeyIds.has(publisherKeyId)
+        && unlinkLocalCommunityFile(path)) {
+        deletedCommunityRevocations += 1;
+      }
+    }
+  }
+
+  // Markers are purge-owned public provenance only. Remove them last. A corrupted
+  // marker cannot retain sensitive export bytes because mandatory deletion already ran.
+  clearLocalPublicOrigins(configDir);
+  return { deletedExports, deletedCommunityBundles, deletedCommunityRevocations };
+}
