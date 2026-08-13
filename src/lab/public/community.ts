@@ -11,7 +11,12 @@ import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { validateCommunityEvidenceAuthorities } from "./community-authority";
-import { publishPrivateFileExclusive } from "./private-file";
+import {
+  cleanupStalePrivateFileStages,
+  cleanupStalePrivateFileStagesInDir,
+  isPrivateFileStageName,
+  publishPrivateFileExclusive,
+} from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { verifyPublicEvidenceRevocation } from "./revocation";
 import { verifyPublicEvidenceBundle } from "./signature";
@@ -123,6 +128,7 @@ function assertRegular(path: string, fd: number): number {
 }
 
 function readBounded(path: string): Buffer {
+  cleanupStalePrivateFileStages(path);
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     assertRegular(path, fd);
@@ -139,7 +145,8 @@ function readBounded(path: string): Buffer {
 function cacheUsage(configDir?: string): { names: string[]; bytes: number } {
   ensureLabDirs(configDir);
   const dir = labCommunityDir(configDir);
-  const names = readdirSync(dir).sort();
+  cleanupStalePrivateFileStagesInDir(dir);
+  const names = readdirSync(dir).filter((name) => !isPrivateFileStageName(name)).sort();
   if (names.length > MAX_CACHE_FILES) {
     throw new PublicEvidenceValidationError("community_cache_bound", "community cache file bound exceeded");
   }
