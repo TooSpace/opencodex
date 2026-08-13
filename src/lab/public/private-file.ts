@@ -14,6 +14,7 @@ import { basename, dirname, join } from "node:path";
 
 export type PrivateFileCommitFault = "before_publish" | null;
 let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
+const PRIVATE_STAGE_RE = /^\..+\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
 
 function cleanup(path: string): void {
   try { unlinkSync(path); } catch { /* absent/already removed */ }
@@ -45,9 +46,12 @@ function fsyncParentBestEffort(path: string): void {
   }
 }
 
-/** Reclaim target-scoped staging links from writers that are definitely no longer alive. */
-export function cleanupStalePrivateFileStages(finalPath: string): void {
-  const dir = dirname(finalPath);
+export function isPrivateFileStageName(name: string): boolean {
+  return PRIVATE_STAGE_RE.test(name);
+}
+
+/** Reclaim all private-file stages in a directory whose writer is definitely dead. */
+export function cleanupStalePrivateFileStagesInDir(dir: string): void {
   let names: string[];
   try {
     names = readdirSync(dir);
@@ -55,16 +59,11 @@ export function cleanupStalePrivateFileStages(finalPath: string): void {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
     throw error;
   }
-  const prefix = staleTempPrefix(finalPath);
   let changed = false;
   for (const name of names) {
-    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
-    const rest = name.slice(prefix.length, -4);
-    const separator = rest.indexOf(".");
-    if (separator < 1) continue;
-    const pidText = rest.slice(0, separator);
-    if (!/^\d+$/.test(pidText)) continue;
-    const pid = Number(pidText);
+    const match = PRIVATE_STAGE_RE.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
     if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
     try {
       unlinkSync(join(dir, name));
@@ -73,7 +72,22 @@ export function cleanupStalePrivateFileStages(finalPath: string): void {
       // Another cleanup or writer may have removed it after enumeration.
     }
   }
-  if (changed) fsyncParentBestEffort(finalPath);
+  if (changed) fsyncParentBestEffort(join(dir, "."));
+}
+
+/** Reclaim target-scoped staging links from writers that are definitely no longer alive. */
+export function cleanupStalePrivateFileStages(finalPath: string): void {
+  const dir = dirname(finalPath);
+  cleanupStalePrivateFileStagesInDir(dir);
+  const prefix = staleTempPrefix(finalPath);
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+    const match = PRIVATE_STAGE_RE.exec(name);
+    if (!match) continue;
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
+    cleanup(join(dir, name));
+  }
 }
 
 function writeAll(fd: number, bytes: Uint8Array): void {
