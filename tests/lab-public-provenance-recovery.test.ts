@@ -6,6 +6,7 @@ import { labPublicOriginDir } from "../src/lab/paths";
 import {
   createPublicEvidenceRevocation,
   importCommunityEvidenceBundle,
+  importCommunityEvidenceValue,
   listCommunityEvidence,
   listLocalPublicOrigins,
   purgeLocalPublicEvidenceCopies,
@@ -111,12 +112,12 @@ test("origin pressure preserves provenance while the matching local export exist
   expect(existsSync(join(dir, `origin-${bundle.publisher.keyId}-${bundle.bundleId}.json`))).toBe(true);
 });
 
-test("importing an own verified bundle restores missing local-origin provenance", () => {
+test("operator import of an own verified bundle restores missing local-origin provenance", () => {
   const home = configDir("ocx-cl10-origin-rehydrate-");
   const bundle = signedBundle(home);
   expect(listLocalPublicOrigins(home)).toEqual([]);
 
-  importCommunityEvidenceBundle(bundle, home);
+  importCommunityEvidenceValue(bundle, home);
   expect(listLocalPublicOrigins(home)).toEqual([{
     publisherKeyId: bundle.publisher.keyId,
     bundleId: bundle.bundleId,
