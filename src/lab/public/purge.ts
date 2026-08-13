@@ -1,10 +1,19 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import { readdirSync, rmSync, unlinkSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fsyncSync,
+  openSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   ensureLabDirs,
   labCommunityDir,
   labExportDir,
+  labPublicOriginDir,
   labPublicPublisherKeyPath,
 } from "../paths";
 import {
@@ -22,6 +31,23 @@ import { parseStrictPublicJson } from "./strict-json";
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
 const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
+
+function syncPurgeDirectory(dir: string, label: "export" | "community" | "origin"): void {
+  if (process.platform === "win32") return;
+  if (label === "export" && publicEvidencePurgeFaultForTests() === "export_directory_sync") {
+    throw new Error("synthetic public export directory sync failure");
+  }
+  let fd: number | null = null;
+  try {
+    fd = openSync(dir, fsConstants.O_RDONLY);
+    fsyncSync(fd);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`public ${label} purge directory sync failed: ${detail}`);
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
 
 /**
  * Publisher provenance is useful only for classifying local community copies. A corrupt
@@ -79,20 +105,17 @@ function purgeAllExports(configDir?: string): number {
     rmSync(join(exportDir, entry.name), { recursive: entry.isDirectory(), force: true });
     deleted += 1;
   }
+  if (deleted > 0) syncPurgeDirectory(exportDir, "export");
   return deleted;
 }
 
-/** Optional public community cleanup must never turn a completed export deletion into failure. */
+/** A locally-originated community copy is part of the mandatory export purge. */
 function unlinkLocalCommunityFile(path: string): boolean {
-  try {
-    privateRegularFileSize(path, {
-      maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
-      errorCode: "community_unsafe_target",
-      errorMessage: "community object is unsafe during purge",
-    });
-  } catch {
-    return false;
-  }
+  privateRegularFileSize(path, {
+    maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+    errorCode: "community_unsafe_target",
+    errorMessage: "community object is unsafe during purge",
+  });
   try {
     unlinkSync(path);
     return true;
@@ -166,9 +189,13 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
       }
     }
   }
+  if (deletedCommunityBundles > 0 || deletedCommunityRevocations > 0) {
+    syncPurgeDirectory(communityDir, "community");
+  }
 
-  // Markers are purge-owned public provenance only. Remove them last. A corrupted
-  // marker cannot retain sensitive export bytes because mandatory deletion already ran.
+  // Markers are purge-owned public provenance only. Remove them last, then establish
+  // deletion durability before the caller may record an export purge tombstone.
   clearLocalPublicOrigins(configDir);
+  syncPurgeDirectory(labPublicOriginDir(configDir), "origin");
   return { deletedExports, deletedCommunityBundles, deletedCommunityRevocations };
 }
