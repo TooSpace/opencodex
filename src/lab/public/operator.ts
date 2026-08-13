@@ -1,23 +1,22 @@
 import {
   closeSync,
   constants as fsConstants,
-  existsSync,
   fstatSync,
   openSync,
   readFileSync,
 } from "node:fs";
-import { join } from "node:path";
 import { replayLabLedger } from "../ledger/store";
-import { labExportDir, labLedgerPath } from "../paths";
+import { labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
+import { recordLocalPublicOrigin } from "./origin";
 import { validatePublicEvidenceRecordPrivacy } from "./privacy";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
 import { projectPublicEvidenceRecord } from "./project";
 import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
-import { writePublicEvidenceBundle } from "./storage";
+import { storePublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
 import { PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION, PUBLIC_EXPORT_POLICY_VERSION } from "./types";
 import type {
@@ -97,7 +96,8 @@ export type PublicOperatorExclusionReason =
   | "no_canonical_verdict";
 
 export interface PublicOperatorExclusionV1 {
-  eventId: string;
+  /** Index into the caller's submitted selection, never a local Lab identifier. */
+  selectionIndex: number;
   reason: PublicOperatorExclusionReason;
 }
 
@@ -108,7 +108,7 @@ export interface LocalPublicPreviewV1 {
 
 export interface LocalPublicExportV1 {
   bundle: PublicEvidenceBundleV1;
-  stored: { path: string; created: boolean };
+  stored: { created: boolean };
   excluded: PublicOperatorExclusionV1[];
 }
 
@@ -116,16 +116,16 @@ export type PublicVerificationSummaryV1 =
   | { status: "cryptographically_valid"; bundleId: string; publisherKeyId: string; locallyVerified: false }
   | { status: "schema_rejected" | "digest_invalid" | "signature_invalid"; locallyVerified: false; detail?: string };
 
-function assertOperatorEventIds(eventIds: readonly string[]): string[] {
+function assertOperatorEventIds(eventIds: readonly string[]): Array<{ eventId: string; selectionIndex: number }> {
   if (eventIds.length === 0 || eventIds.length > MAX_OPERATOR_EVENTS) {
     throw new PublicEvidenceValidationError(
       "public_selection_limit",
       `public evidence selection must contain 1..${MAX_OPERATOR_EVENTS} event ids`,
     );
   }
-  const unique: string[] = [];
+  const unique: Array<{ eventId: string; selectionIndex: number }> = [];
   const seen = new Set<string>();
-  for (const eventId of eventIds) {
+  for (const [selectionIndex, eventId] of eventIds.entries()) {
     if (!/^[0-9a-f]{64}$/.test(eventId)) {
       throw new PublicEvidenceValidationError(
         "public_selection_event_id",
@@ -134,7 +134,7 @@ function assertOperatorEventIds(eventIds: readonly string[]): string[] {
     }
     if (seen.has(eventId)) continue;
     seen.add(eventId);
-    unique.push(eventId);
+    unique.push({ eventId, selectionIndex });
   }
   return unique;
 }
@@ -164,41 +164,41 @@ export function previewLocalPublicEvidence(
   input: { eventIds: readonly string[] },
   configDir?: string,
 ): LocalPublicPreviewV1 {
-  const eventIds = assertOperatorEventIds(input.eventIds);
+  const selections = assertOperatorEventIds(input.eventIds);
   const replay = replayLabLedger(labLedgerPath(configDir));
   const byId = new Map(replay.events.map((event) => [event.eventId, event] as const));
   const projectInputs: ProjectPublicEvidenceRecordInput[] = [];
-  const projectEventIds: string[] = [];
+  const projectSelectionIndices: number[] = [];
   const excluded: PublicOperatorExclusionV1[] = [];
   let sawObservation = false;
 
-  for (const eventId of eventIds) {
+  for (const { eventId, selectionIndex } of selections) {
     const event = byId.get(eventId);
     if (!event) {
-      excluded.push({ eventId, reason: "event_not_found" });
+      excluded.push({ selectionIndex, reason: "event_not_found" });
       continue;
     }
     if (event.eventKind !== "observation") {
-      excluded.push({ eventId, reason: "not_observation" });
+      excluded.push({ selectionIndex, reason: "not_observation" });
       continue;
     }
     sawObservation = true;
     const projectedEvent = queryLabEventById(eventId, configDir);
     if (!projectedEvent) {
-      excluded.push({ eventId, reason: "event_not_found" });
+      excluded.push({ selectionIndex, reason: "event_not_found" });
       continue;
     }
     if (projectedEvent.excluded) {
-      excluded.push({ eventId, reason: "event_excluded" });
+      excluded.push({ selectionIndex, reason: "event_excluded" });
       continue;
     }
     const verdict = canonicalVerdictForObservation(event, configDir);
     if (!verdict) {
-      excluded.push({ eventId, reason: "no_canonical_verdict" });
+      excluded.push({ selectionIndex, reason: "no_canonical_verdict" });
       continue;
     }
     projectInputs.push({ observation: event, verdict });
-    projectEventIds.push(eventId);
+    projectSelectionIndices.push(selectionIndex);
   }
 
   if (!sawObservation) {
@@ -207,8 +207,9 @@ export function previewLocalPublicEvidence(
 
   const projected = projectPublicEvidence({ records: projectInputs });
   for (const row of projected.excluded) {
-    excluded.push({ eventId: projectEventIds[row.index]!, reason: row.reason });
+    excluded.push({ selectionIndex: projectSelectionIndices[row.index]!, reason: row.reason });
   }
+  excluded.sort((a, b) => a.selectionIndex - b.selectionIndex);
   return { bundle: projected.bundle, excluded };
 }
 
@@ -226,10 +227,11 @@ export function exportLocalPublicEvidence(
     createdDayUtc: preview.bundle.createdDayUtc,
     configDir,
   });
-  const expectedPath = join(labExportDir(configDir), `${bundle.bundleId}.json`);
-  const created = !existsSync(expectedPath);
-  const path = writePublicEvidenceBundle(bundle, configDir);
-  return { bundle, stored: { path, created }, excluded: preview.excluded };
+  // Persist provenance before the export file so no successfully-created local export can
+  // exist without purge-owned origin evidence. An orphan marker is conservative and safe.
+  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
+  const stored = storePublicEvidenceBundle(bundle, configDir);
+  return { bundle, stored: { created: stored.created }, excluded: preview.excluded };
 }
 
 export function summarizePublicEvidenceVerification(raw: unknown): PublicVerificationSummaryV1 {
@@ -275,12 +277,12 @@ export function verifyPublicEvidenceFile(path: string): PublicVerificationSummar
 }
 
 export function importCommunityEvidenceFile(path: string, configDir?: string) {
-  const imported = importCommunityEvidenceBundle(readBoundedPublicFile(path), configDir);
+  const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(readBoundedPublicFile(path), configDir);
   return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
 }
 
 export function importCommunityEvidenceValue(raw: unknown, configDir?: string) {
-  const imported = importCommunityEvidenceBundle(raw, configDir);
+  const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(raw, configDir);
   return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
 }
 
