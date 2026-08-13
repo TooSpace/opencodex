@@ -5,7 +5,6 @@ import { readPrivateRegularFile } from "./file-safety";
 import { cleanupStalePrivateFileStagesInDir, isPrivateFileStageName } from "./private-file";
 import { parseStrictPublicJson } from "./strict-json";
 
-const MAX_ORIGINS = 1024;
 const MAX_ORIGIN_BYTES = 1024;
 const ORIGIN_RE = /^origin-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 
@@ -17,7 +16,9 @@ export interface PurgeOriginIdentity {
 /**
  * Purge must salvage each provenance marker independently. A corrupt marker is untrusted
  * and skipped, but it cannot hide later valid markers that are needed to classify local
- * community copies after the export or publisher key is unavailable.
+ * community copies after the export or publisher key is unavailable. The operational
+ * 1024-marker quota is deliberately not a read cutoff here: recovery must inspect every
+ * valid-format marker present after a race/crash instead of silently losing provenance.
  */
 export function listValidPublicOriginsForPurge(configDir?: string): PurgeOriginIdentity[] {
   ensureLabDirs(configDir);
@@ -25,8 +26,7 @@ export function listValidPublicOriginsForPurge(configDir?: string): PurgeOriginI
   cleanupStalePrivateFileStagesInDir(dir);
   const names = readdirSync(dir)
     .filter((name) => !isPrivateFileStageName(name) && ORIGIN_RE.test(name))
-    .sort()
-    .slice(0, MAX_ORIGINS);
+    .sort();
   const identities: PurgeOriginIdentity[] = [];
 
   for (const name of names) {
