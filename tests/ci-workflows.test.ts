@@ -737,8 +737,17 @@ describe("GitHub Actions hardening", () => {
     }
     expect(createStep).not.toContain("set +e\n            pr_notes");
     expect(createStep.indexOf("gh api")).toBeGreaterThan(-1);
-    expect(createStep.indexOf('git tag "$release_tag"')).toBeGreaterThan(-1);
-    expect(createStep.indexOf("gh api")).toBeLessThan(createStep.indexOf('git tag "$release_tag"'));
+    const tagRefApi = '"repos/${GITHUB_REPOSITORY}/git/refs"';
+    expect(createStep).toContain("gh api --method POST");
+    expect(createStep).toContain(tagRefApi);
+    expect(createStep).toContain('-f ref="refs/tags/${release_tag}"');
+    expect(createStep).toContain('-f sha="$GITHUB_SHA" >/dev/null');
+    expect(createStep).not.toContain('git tag "$release_tag"');
+    expect(createStep).not.toContain('git push origin "refs/tags/${release_tag}"');
+    
+    // Release notes must be fully rendered before the remote tag is created.
+    expect(createStep.indexOf('"${render_args[@]}"'))
+      .toBeLessThan(createStep.indexOf(tagRefApi));
     // The notes baseline must read the FULL tag set, not `--merged HEAD`: stable
     // tags live on main's lineage, which the preview branch does not carry, and a
     // trailing same-core preview must not hide the stable from the range
