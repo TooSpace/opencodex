@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { applyProviderConfigHints, buildCatalogEntries, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { gatherRoutedModels } from "../src/codex/catalog";
 import { deriveComboCatalogModel } from "../src/codex/catalog/aggregation";
 import type { CatalogModel } from "../src/codex/catalog/parsing";
 import {
@@ -234,6 +235,45 @@ describe("combo tool-discovery derivation", () => {
       members,
     );
     expect(combo?.toolDiscoveryMode).toBe("direct");
+  });
+});
+
+describe("routed tool-discovery gather identity", () => {
+  // Scope note, established by ablation: deleting `rtd`/`mrtd` from
+  // providerCatalogFingerprint leaves BOTH cases below green, because
+  // providerGraphIdentity already hashes the whole admitted provider row and refuses the
+  // join on its own. So these are end-to-end behavior guards, NOT proof that the
+  // fingerprint carries the policy. The fingerprint fields are added because it is an
+  // explicit allow-list whose omissions have leaked flights twice before (credentials,
+  // then reasoningEfforts, both reproduced against real routes) — keeping it semantically
+  // complete is defense in depth, and its correctness is not what these cases pin.
+  function gatherConfig(routedToolDiscovery?: "auto" | "deferred" | "direct"): never {
+    return {
+      defaultProvider: "deepseek",
+      providers: {
+        deepseek: {
+          adapter: "openai-responses",
+          baseUrl: "https://example.invalid",
+          models: ["glm-5.2"],
+          liveModels: false,
+          ...(routedToolDiscovery ? { routedToolDiscovery } : {}),
+        },
+      },
+    } as never;
+  }
+
+  it("gathers distinct results for two different policies", async () => {
+    const deferred = await gatherRoutedModels(gatherConfig());
+    const direct = await gatherRoutedModels(gatherConfig("direct"));
+
+    expect(deferred.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("deferred");
+    expect(direct.find(model => model.id === "glm-5.2")?.toolDiscoveryMode).toBe("direct");
+  });
+
+  it("still reuses the gather for an identical policy", async () => {
+    const first = await gatherRoutedModels(gatherConfig("direct"));
+    const second = await gatherRoutedModels(gatherConfig("direct"));
+    expect(second).toEqual(first);
   });
 });
 
