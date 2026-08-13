@@ -5,19 +5,21 @@ import type {
   PublicRouteRegistryManifestV1,
 } from "./types";
 
-const PUBLIC_ROUTE_REGISTRY_SOURCE_COMMIT = "fdc954a3ae721d6618e3bfb0cbd1a3163888b674";
+// Authority snapshot: the last fully green exact PR head reviewed before this
+// manifest narrowing. Its tree contains both the provider authority and registry.
+const PUBLIC_ROUTE_REGISTRY_SOURCE_COMMIT = "1994d9ae0c018762dbf2a694fca068db380c55d0";
 
 const entries: PublicRouteRegistryEntryV1[] = [
   {
     providerId: "openai",
     modelId: "gpt-5.6-sol",
-    adapterFamilies: ["openai-responses", "openai-chat"],
+    adapterFamilies: ["openai-responses"],
   },
 ];
 
 const manifestWithoutDigest = {
   schemaVersion: "public_route_registry_v1" as const,
-  registryVersion: "2026-08-12.v1",
+  registryVersion: "2026-08-13.v2",
   sourceCommit: PUBLIC_ROUTE_REGISTRY_SOURCE_COMMIT,
   entries,
 };
