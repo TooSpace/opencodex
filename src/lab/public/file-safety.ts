@@ -2,10 +2,15 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
+  fsyncSync,
   lstatSync,
   openSync,
   readFileSync,
+  readdirSync,
+  unlinkSync,
 } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { isPrivateFileStageName } from "./private-file";
 import { PublicEvidenceValidationError } from "./validate";
 
 const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
@@ -26,12 +31,75 @@ function sizeError(options: PrivateRegularFileReadOptions): PublicEvidenceValida
   );
 }
 
+/**
+ * Heal only the publication-specific hard link left behind when the final name was linked
+ * but the parent-directory durability check failed. The stage must be target-scoped and
+ * inode-identical to the final file; unrelated hard links remain and are rejected below.
+ */
+function recoverPublishedPrivateFileStage(path: string): void {
+  if (process.platform === "win32") return;
+  const finalStats = lstatSync(path);
+  if (finalStats.isSymbolicLink() || !finalStats.isFile() || finalStats.nlink <= 1) return;
+
+  const dir = dirname(path);
+  const prefix = `.${basename(path)}.`;
+  const candidates: string[] = [];
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !isPrivateFileStageName(name)) continue;
+    const stagePath = join(dir, name);
+    try {
+      const stageStats = lstatSync(stagePath);
+      if (
+        stageStats.isFile()
+        && !stageStats.isSymbolicLink()
+        && stageStats.dev === finalStats.dev
+        && stageStats.ino === finalStats.ino
+      ) {
+        candidates.push(stagePath);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (candidates.length === 0) return;
+
+  // The final directory entry already exists. Make that entry durable before deleting
+  // the recovery witness. A real fsync failure propagates and the strict read stays closed.
+  let dirFd: number | null = null;
+  try {
+    dirFd = openSync(dir, fsConstants.O_RDONLY);
+    fsyncSync(dirFd);
+  } finally {
+    if (dirFd !== null) closeSync(dirFd);
+  }
+
+  for (const stagePath of candidates) {
+    try {
+      const stageStats = lstatSync(stagePath);
+      if (
+        stageStats.isFile()
+        && !stageStats.isSymbolicLink()
+        && stageStats.dev === finalStats.dev
+        && stageStats.ino === finalStats.ino
+      ) {
+        unlinkSync(stagePath);
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 function withPrivateRegularFile<T>(
   path: string,
   options: PrivateRegularFileReadOptions,
   consume: (fd: number, size: number) => T,
 ): T {
-  const pathStats = lstatSync(path);
+  let pathStats = lstatSync(path);
+  if (!pathStats.isSymbolicLink() && pathStats.isFile() && pathStats.nlink > 1) {
+    recoverPublishedPrivateFileStage(path);
+    pathStats = lstatSync(path);
+  }
   if (pathStats.isSymbolicLink() || !pathStats.isFile() || pathStats.nlink !== 1) {
     throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
   }
