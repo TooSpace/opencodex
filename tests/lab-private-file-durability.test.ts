@@ -23,7 +23,7 @@ function tempRoot(): string {
 }
 
 describe("CL-10 private-file durability", () => {
-  test("POSIX parent-directory sync failure is reported and retry becomes idempotent", () => {
+  test("POSIX parent-directory sync failure preserves the published stage until retry", () => {
     if (process.platform === "win32") return;
     const root = tempRoot();
     const finalPath = join(root, "bundle.json");
@@ -32,9 +32,26 @@ describe("CL-10 private-file durability", () => {
     setCommitFault("parent_directory_sync");
     expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/directory.*sync|durab/i);
     expect(existsSync(finalPath)).toBe(true);
+    expect(readdirSync(root).filter(isPrivateFileStageName)).toHaveLength(1);
 
     setPrivateFileCommitFaultForTests(null);
     expect(publishPrivateFileExclusive(finalPath, bytes)).toEqual({ created: false });
+    expect(readFileSync(finalPath).equals(bytes)).toBe(true);
+    expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
+  });
+
+  test("before-publish failure leaves no final path or staging entry and retry creates cleanly", () => {
+    const root = tempRoot();
+    const finalPath = join(root, "bundle.json");
+    const bytes = Buffer.from("durable-public-evidence", "utf8");
+
+    setCommitFault("before_publish");
+    expect(() => publishPrivateFileExclusive(finalPath, bytes)).toThrow(/before publish/i);
+    expect(existsSync(finalPath)).toBe(false);
+    expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
+
+    setPrivateFileCommitFaultForTests(null);
+    expect(publishPrivateFileExclusive(finalPath, bytes)).toEqual({ created: true });
     expect(readFileSync(finalPath).equals(bytes)).toBe(true);
     expect(readdirSync(root).filter(isPrivateFileStageName)).toEqual([]);
   });

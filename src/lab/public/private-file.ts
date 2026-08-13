@@ -4,6 +4,7 @@ import {
   constants as fsConstants,
   fsyncSync,
   linkSync,
+  lstatSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -104,6 +105,36 @@ export function cleanupStalePrivateFileStages(finalPath: string): void {
   cleanupStalePrivateFileStagesInDir(dirname(finalPath));
 }
 
+/** Remove only stage links that already reference the durable final inode. */
+function cleanupPublishedPrivateFileStages(finalPath: string): void {
+  let finalStats;
+  try {
+    finalStats = lstatSync(finalPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!finalStats.isFile() || finalStats.isSymbolicLink()) return;
+
+  const dir = dirname(finalPath);
+  const prefix = staleTempPrefix(finalPath);
+  let changed = false;
+  for (const name of readdirSync(dir)) {
+    if (!name.startsWith(prefix) || !PRIVATE_STAGE_RE.test(name)) continue;
+    const stagePath = join(dir, name);
+    try {
+      const stageStats = lstatSync(stagePath);
+      if (!stageStats.isFile() || stageStats.isSymbolicLink()) continue;
+      if (stageStats.dev !== finalStats.dev || stageStats.ino !== finalStats.ino) continue;
+      unlinkSync(stagePath);
+      changed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  if (changed) fsyncParentBestEffort(finalPath);
+}
+
 function writeAll(fd: number, bytes: Uint8Array): void {
   let offset = 0;
   while (offset < bytes.byteLength) {
@@ -129,6 +160,7 @@ export function publishPrivateFileExclusive(
     `${staleTempPrefix(finalPath)}${process.pid}.${randomUUID()}.tmp`,
   );
   let fd: number | null = null;
+  let preservePublishedStage = false;
   try {
     fd = openSync(tempPath, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL, 0o600);
     writeAll(fd, bytes);
@@ -145,18 +177,29 @@ export function publishPrivateFileExclusive(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") {
         // A prior publication may have linked the final entry but failed while
-        // syncing the parent directory. Re-sync before reporting idempotent success.
+        // syncing the parent directory. Re-sync before reporting idempotent success,
+        // then remove only stages that are hard links to that durable final inode.
         fsyncParentForPublication(finalPath);
+        cleanupPublishedPrivateFileStages(finalPath);
         return { created: false };
       }
       throw error;
     }
-    fsyncParentForPublication(finalPath);
+    try {
+      fsyncParentForPublication(finalPath);
+    } catch (error) {
+      // The final name exists, but POSIX durability was not established. Keep this
+      // exact hard-link stage so a retry can re-sync and then identify it by inode.
+      preservePublishedStage = true;
+      throw error;
+    }
     return { created: true };
   } finally {
     if (fd !== null) closeSync(fd);
-    cleanup(tempPath);
-    fsyncParentBestEffort(finalPath);
+    if (!preservePublishedStage) {
+      cleanup(tempPath);
+      fsyncParentBestEffort(finalPath);
+    }
   }
 }
 
