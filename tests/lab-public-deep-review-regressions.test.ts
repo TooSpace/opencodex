@@ -147,10 +147,12 @@ describe("CL-10 deep-review trust regressions", () => {
     importCommunityEvidenceRevocation(revocation, consumer);
     importCommunityEvidenceBundle(second, consumer);
 
-    expect(listCommunityEvidence(consumer)).toEqual([
+    const summaries = listCommunityEvidence(consumer);
+    expect(summaries.map((row) => row.bundleId)).toEqual([first.bundleId, second.bundleId].sort());
+    expect(summaries).toEqual(expect.arrayContaining([
       expect.objectContaining({ bundleId: first.bundleId, activeRecordCount: 0, revokedRecordCount: 1 }),
       expect.objectContaining({ bundleId: second.bundleId, activeRecordCount: 0, revokedRecordCount: 1 }),
-    ].sort((a, b) => String(a.bundleId).localeCompare(String(b.bundleId))));
+    ]));
   });
 
   test("invalid signing input fails before publisher identity is created", () => {
