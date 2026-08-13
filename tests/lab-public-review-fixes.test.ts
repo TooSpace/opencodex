@@ -1,6 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
 import {
-  chmodSync,
   existsSync,
   linkSync,
   mkdtempSync,
@@ -14,6 +13,7 @@ import { ensureLabDirs, labPublicOriginDir } from "../src/lab/paths";
 import { purgeSensitiveEvidence } from "../src/lab/ledger/purge";
 import { replayLabLedger } from "../src/lab/ledger/store";
 import * as publicApi from "../src/lab/public";
+import { setPublicEvidencePurgeFaultForTests } from "../src/lab/public/purge";
 import {
   importCommunityEvidenceBundle,
   purgeLocalPublicEvidenceCopies,
@@ -27,6 +27,7 @@ import {
 
 const roots: string[] = [];
 afterEach(() => {
+  setPublicEvidencePurgeFaultForTests(null);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -92,8 +93,9 @@ test("decoded community objects are depth-bounded before JCS canonicalization", 
   }
 });
 
-test("public barrel does not expose the private-file test fault setter", () => {
+test("public barrel does not expose private test fault setters", () => {
   expect("setPrivateFileCommitFaultForTests" in publicApi).toBe(false);
+  expect("setPublicEvidencePurgeFaultForTests" in publicApi).toBe(false);
 });
 
 test("public origin quota stays bounded when unreclaimable unexpected entries fill it", () => {
@@ -166,14 +168,11 @@ test("unsafe optional community copies do not turn a completed export purge into
 });
 
 test("failed export purge is omitted from the durable tombstone action set", () => {
-  if (process.platform === "win32") return;
   const home = configDir("ocx-cl10-tombstone-export-");
   const paths = ensureLabDirs(home);
   writeFileSync(join(paths.scratchDir, "scratch.txt"), "scratch", { mode: 0o600 });
   writeFileSync(join(paths.exportDir, "sensitive.txt"), "sensitive", { mode: 0o600 });
-  // Deleting a child requires write permission on the parent directory. Keep read and
-  // execute so purge can enumerate the export directory but make unlink fail reliably.
-  chmodSync(paths.exportDir, 0o500);
+  setPublicEvidencePurgeFaultForTests("before_export_delete");
 
   let failure: unknown;
   try {
@@ -185,7 +184,7 @@ test("failed export purge is omitted from the durable tombstone action set", () 
   } catch (error) {
     failure = error;
   } finally {
-    chmodSync(paths.exportDir, 0o700);
+    setPublicEvidencePurgeFaultForTests(null);
   }
   expect(failure).toBeInstanceOf(Error);
 
