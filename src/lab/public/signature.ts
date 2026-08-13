@@ -22,7 +22,7 @@ import {
 } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { publicEvidenceId } from "./ids";
-import { publishPrivateFileExclusive } from "./private-file";
+import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy, validatePublicEvidenceRecordPrivacy } from "./privacy";
 import type {
   PublicEvidenceBundleV1,
@@ -53,6 +53,7 @@ function publisherForPrivateKey(privateKeyPem: string): PublicPublisherV1 {
 }
 
 function readRestrictedPrivateKey(path: string): string {
+  cleanupStalePrivateFileStages(path);
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     const stats = fstatSync(fd);
