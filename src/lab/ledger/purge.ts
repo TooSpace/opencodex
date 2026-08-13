@@ -156,6 +156,25 @@ function normalizePurgeError(err: unknown, completed: readonly string[]): PurgeE
   );
 }
 
+function buildPurgeTombstone(
+  req: SensitivePurgeRequest,
+  removeIds: ReadonlySet<string>,
+  targetArtifactDigests: string[],
+  purgeActions: Array<(typeof PURGE_ACTIONS)[number]>,
+): PurgeTombstoneEvent {
+  return validateLabEvent(assignEventId({
+    schemaVersion: LAB_EVENT_SCHEMA_VERSION,
+    eventKind: "purge_tombstone" as const,
+    recordedAt: req.recordedAt ?? Date.now(),
+    producer: LAB_PRODUCER,
+    producerVersion: req.producerVersion ?? LAB_PRODUCER_VERSION,
+    targetEventIds: [...removeIds].sort(),
+    targetArtifactDigests,
+    reason: "sensitive_evidence" as const,
+    purgeActions,
+  })) as PurgeTombstoneEvent;
+}
+
 /**
  * Exceptional sensitive-evidence purge:
  * physically remove targeted JSONL lines and artifacts, append purge_tombstone,
@@ -177,19 +196,6 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
     explicitSensitive,
   );
 
-  const tombstonePayload = {
-    schemaVersion: LAB_EVENT_SCHEMA_VERSION,
-    eventKind: "purge_tombstone" as const,
-    recordedAt: req.recordedAt ?? Date.now(),
-    producer: LAB_PRODUCER,
-    producerVersion: req.producerVersion ?? LAB_PRODUCER_VERSION,
-    targetEventIds: [...removeIds].sort(),
-    targetArtifactDigests,
-    reason: "sensitive_evidence" as const,
-    purgeActions,
-  };
-  const tombstone = validateLabEvent(assignEventId(tombstonePayload)) as PurgeTombstoneEvent;
-
   const deletionPlan = purgeActions.includes("artifact")
     ? artifactDeletionPlan(replay.events, index, removeIds, targetArtifactDigests)
     : { deletable: [], retainedExplicit: [] };
@@ -205,6 +211,7 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
   const completed: string[] = [];
   let deferredExportError: PurgeError | null = null;
   let operationError: PurgeError | null = null;
+  let tombstone: PurgeTombstoneEvent | null = null;
 
   try {
     if (purgeActions.includes("scratch")) {
@@ -230,18 +237,31 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       completed.push("artifact");
     }
 
-    if (purgeActions.includes("ledger")) {
-      const kept: LabEvent[] = [];
-      for (const event of replay.events) {
-        if (removeIds.has(event.eventId)) continue;
-        kept.push(event);
+    // Never persist a tombstone claiming that export completed when the export purge
+    // failed. Other independent actions remain recordable and continue as requested.
+    const tombstoneActions = deferredExportError
+      ? purgeActions.filter((action) => action !== "export")
+      : purgeActions;
+    const hasTombstoneTarget = removeIds.size > 0
+      || targetArtifactDigests.length > 0
+      || tombstoneActions.includes("scratch")
+      || tombstoneActions.includes("export");
+
+    if (tombstoneActions.length > 0 && (hasTombstoneTarget || !deferredExportError)) {
+      tombstone = buildPurgeTombstone(req, removeIds, targetArtifactDigests, tombstoneActions);
+      if (purgeActions.includes("ledger")) {
+        const kept: LabEvent[] = [];
+        for (const event of replay.events) {
+          if (removeIds.has(event.eventId)) continue;
+          kept.push(event);
+        }
+        kept.push(tombstone);
+        atomicRewriteLedger(paths.ledgerPath, kept);
+      } else {
+        appendLabEvent(paths.ledgerPath, tombstone);
       }
-      kept.push(tombstone);
-      atomicRewriteLedger(paths.ledgerPath, kept);
-    } else {
-      appendLabEvent(paths.ledgerPath, tombstone);
+      completed.push("ledger");
     }
-    completed.push("ledger");
 
     if (purgeActions.includes("sqlite")) {
       rebuildLabProjection(req.configDir);
@@ -267,6 +287,9 @@ export function purgeSensitiveEvidence(req: SensitivePurgeRequest): PurgeTombsto
       deferredExportError.message,
       [...new Set([...completed, ...deferredExportError.completedActions])],
     );
+  }
+  if (!tombstone) {
+    throw new PurgeError("purge_failed", "purge completed without a durable tombstone", completed);
   }
   return tombstone;
 }
