@@ -8,8 +8,8 @@ import {
 import { ensureLabDirs, labPublicPublisherKeyPath } from "../paths";
 import {
   buildPublicEvidenceBundle,
-  expectedPublicBundleIdentity,
-  hasCanonicalPublicEvidenceOrder,
+  canonicalPublicEvidenceContent,
+  expectedPublicBundleIdentityFromNormalized,
   normalizePublicEvidenceContent,
   type BuildPublicEvidenceBundleInput,
 } from "./bundle";
@@ -164,8 +164,9 @@ export function verifyPublicEvidenceBundle(bundle: PublicEvidenceBundleV1): Publ
     if (Object.keys(bundle.signature).some((key) => !["algorithm", "signedDigest", "signature"].includes(key))) {
       return { status: "schema_rejected" };
     }
-    if (!hasCanonicalPublicEvidenceOrder(bundle)) return { status: "schema_rejected" };
-    const expected = expectedPublicBundleIdentity(bundle);
+    const canonical = canonicalPublicEvidenceContent(bundle);
+    if (!canonical.canonical) return { status: "schema_rejected" };
+    const expected = expectedPublicBundleIdentityFromNormalized(canonical.normalized, bundle.publisher);
     if (bundle.bundleId !== expected.bundleId || bundle.bundleDigest !== expected.bundleDigest) {
       return { status: "digest_invalid" };
     }
