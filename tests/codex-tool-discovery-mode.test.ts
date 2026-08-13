@@ -289,14 +289,21 @@ describe("combo tool-discovery derivation", () => {
         members,
       );
       expect(combo?.toolDiscoveryMode).toBe("direct");
+      // The derived model must CARRY the alias; re-attaching it here would let a broken
+      // derivation pass, which is exactly how an earlier revision of this test fooled itself.
+      expect(combo?.alias).toBe(alias as never);
 
       const slug = alias ?? "combo/mixed";
-      const rows = buildCatalogEntries(null, [], [{ ...combo!, ...(alias ? { alias } : {}) }], undefined, false, "default", new Set(alias ? [alias] : []));
-      const row = rows.find(entry => entry.slug === slug) ?? rows[0]!;
-      expect(row.supports_search_tool).toBe(false);
+      const rows = buildCatalogEntries(null, [], [combo!], undefined, false, "default", new Set(alias ? [alias] : []));
+      // No `?? rows[0]` fallback: the row must exist at the EXACT expected slug, or the
+      // alias shape is not actually being exercised.
+      const row = rows.find(entry => entry.slug === slug);
+      expect(row).toBeDefined();
+      expect(row!.slug).toBe(slug);
+      expect(row!.supports_search_tool).toBe(false);
       // Hosted search stays independent of the discovery policy on every shape.
-      expect(row.web_search_tool_type).toBe("text_and_image");
-      expect(row.tool_mode).toBe("code_mode_only");
+      expect(row!.web_search_tool_type).toBe("text_and_image");
+      expect(row!.tool_mode).toBe("code_mode_only");
     }
   });
 
@@ -310,14 +317,16 @@ describe("combo tool-discovery derivation", () => {
       ],
     );
     expect(combo?.toolDiscoveryMode).toBe("direct");
+    expect(combo?.alias).toBe("gpt-5.6-sol");
     expect(combo?.nativeAlias).toBe(true);
 
     const rows = buildCatalogEntries(null, [], [combo!], undefined, false, "default", new Set(["gpt-5.6-sol"]));
-    const row = rows.find(entry => entry.slug === "gpt-5.6-sol") ?? rows[0]!;
+    const row = rows.find(entry => entry.slug === "gpt-5.6-sol");
+    expect(row).toBeDefined();
     // A combo that takes over a native slug is still a ROUTED row and must carry the
     // resolved policy rather than inheriting native catalog defaults.
-    expect(row.supports_search_tool).toBe(false);
-    expect(row.tool_mode).toBe("code_mode_only");
+    expect(row!.supports_search_tool).toBe(false);
+    expect(row!.tool_mode).toBe("code_mode_only");
   });
 });
 

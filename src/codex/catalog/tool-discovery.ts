@@ -13,8 +13,10 @@ import { modelRecordValue } from "../../reasoning-effort";
  * declaration in `exec.description`, the measured 96,699 → 258,929 char turn-1 regression
  * behind PR #1596 — plus `tool_search` construction and the deferred-guidance text.
  *
- * So `direct` is a compatibility/comprehension lever with a payload cost, NOT a
- * reachability fix. It also cannot repair a tool removed by `direct_only_tool_namespaces`,
+ * So `direct` reads as a compatibility/comprehension lever with a payload cost rather than a
+ * reachability fix. That conclusion comes from the upstream source above, not from an executed
+ * single-variable differential — devlog `020` still owes that run, so treat it as well-grounded
+ * but unproven. It also cannot repair a tool removed by `direct_only_tool_namespaces`,
  * `excluded_tool_namespaces`, or MCP/App policy filtering, all of which are independent of
  * this flag. Full analysis and citations:
  * devlog/_plan/260813_routed_tool_discovery_profiles/094_landing_verification_pass.md.

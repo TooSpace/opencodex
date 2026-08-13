@@ -183,8 +183,10 @@ with template availability (unresolved P2 on #1596).
 
 Scope of the reachability claim: it holds for an ELIGIBLE MCP tool. `direct_only_tool_namespaces`,
 `excluded_tool_namespaces`, and MCP/App policy filtering remove tools independently of this flag,
-and no override repairs them. So `direct` is a comprehension/compatibility lever with a payload
-cost, not a reachability fix. Analysis and citations:
+and no override repairs them. On that reading `direct` is a comprehension/compatibility lever with
+a payload cost rather than a reachability fix — a conclusion drawn from the upstream `codex-rs`
+source, NOT yet from an executed single-variable differential (devlog `020` still owes that run,
+and `029` records it as open). Analysis and citations:
 `devlog/_plan/260813_routed_tool_discovery_profiles/094_landing_verification_pass.md`.
 
 [Decision Log]
