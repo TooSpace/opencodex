@@ -1,14 +1,5 @@
 import { createPrivateKey, createPublicKey } from "node:crypto";
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  unlinkSync,
-} from "node:fs";
+import { readdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import {
   ensureLabDirs,
@@ -16,13 +7,12 @@ import {
   labExportDir,
   labPublicPublisherKeyPath,
 } from "../paths";
+import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
 import { publicEvidenceId } from "./ids";
 import { clearLocalPublicOrigins, listLocalPublicOrigins } from "./origin";
 import { readPublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
-import { PublicEvidenceValidationError } from "./validate";
 
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
 const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
@@ -36,16 +26,14 @@ const COMMUNITY_REVOCATION_RE = /^revocation-([0-9a-f]{64})\.json$/;
  */
 function readExistingPublisherKeyId(configDir?: string): string | null {
   const path = labPublicPublisherKeyPath(configDir);
-  let fd: number | null = null;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_PRIVATE_KEY_BYTES) {
-      return null;
-    }
-    if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) return null;
-    const pem = readFileSync(fd, { encoding: "utf8" });
-    if (Buffer.byteLength(pem) > MAX_PRIVATE_KEY_BYTES || !pem.includes("BEGIN PRIVATE KEY")) return null;
+    const pem = readPrivateRegularFile(path, {
+      maxBytes: MAX_PRIVATE_KEY_BYTES,
+      errorCode: "public_publisher_key_unsafe",
+      errorMessage: "public publisher key is unsafe during purge",
+      requireMode600: true,
+    }).toString("utf8");
+    if (!pem.includes("BEGIN PRIVATE KEY")) return null;
     const privateKey = createPrivateKey(pem);
     if (privateKey.asymmetricKeyType !== "ed25519") return null;
     const publicKey = createPublicKey(pem);
@@ -53,8 +41,6 @@ function readExistingPublisherKeyId(configDir?: string): string | null {
     return publicEvidenceId("publisher_key", { algorithm: "ed25519", publicKey: publicKeyDer });
   } catch {
     return null;
-  } finally {
-    if (fd !== null) closeSync(fd);
   }
 }
 
@@ -89,22 +75,16 @@ function purgeAllExports(configDir?: string): number {
   return deleted;
 }
 
-function unlinkLocalCommunityFile(path: string, entryName: string): boolean {
-  let fd: number | null = null;
+/** Optional public community cleanup must never turn a completed export deletion into failure. */
+function unlinkLocalCommunityFile(path: string): boolean {
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
-      throw new PublicEvidenceValidationError(
-        "community_unsafe_target",
-        `refusing to purge unsafe locally-originated community path: ${entryName}`,
-      );
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-    throw error;
-  } finally {
-    if (fd !== null) closeSync(fd);
+    privateRegularFileSize(path, {
+      maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+      errorCode: "community_unsafe_target",
+      errorMessage: "community object is unsafe during purge",
+    });
+  } catch {
+    return false;
   }
   try {
     unlinkSync(path);
@@ -116,14 +96,15 @@ function unlinkLocalCommunityFile(path: string, entryName: string): boolean {
 }
 
 function communityObjectPublisherKeyId(path: string): string | null {
-  let fd: number | null = null;
   try {
-    fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_COMMUNITY_OBJECT_BYTES) {
-      return null;
-    }
-    const raw = parseStrictPublicJson(readFileSync(fd), "community object during purge");
+    const raw = parseStrictPublicJson(
+      readPrivateRegularFile(path, {
+        maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+        errorCode: "community_unsafe_target",
+        errorMessage: "community object is unsafe during purge",
+      }),
+      "community object during purge",
+    );
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const publisher = (raw as { publisher?: unknown }).publisher;
     if (!publisher || typeof publisher !== "object" || Array.isArray(publisher)) return null;
@@ -131,8 +112,6 @@ function communityObjectPublisherKeyId(path: string): string | null {
     return typeof keyId === "string" && /^[0-9a-f]{64}$/.test(keyId) ? keyId : null;
   } catch {
     return null;
-  } finally {
-    if (fd !== null) closeSync(fd);
   }
 }
 
@@ -145,9 +124,15 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
 
   const exportedIdentities = localExportIdentities(configDir);
   const localPublisherKeyIds = new Set<string>();
-  for (const origin of listLocalPublicOrigins(configDir)) {
-    exportedIdentities.add(publicIdentity(origin.publisherKeyId, origin.bundleId));
-    localPublisherKeyIds.add(origin.publisherKeyId);
+  try {
+    for (const origin of listLocalPublicOrigins(configDir)) {
+      exportedIdentities.add(publicIdentity(origin.publisherKeyId, origin.bundleId));
+      localPublisherKeyIds.add(origin.publisherKeyId);
+    }
+  } catch {
+    // Provenance corruption must never retain the mandatory sensitive export bytes.
+    // Legacy export identity and the current publisher key still provide best-effort
+    // classification for public community cleanup below.
   }
   const currentPublisherKeyId = readExistingPublisherKeyId(configDir);
   if (currentPublisherKeyId) localPublisherKeyIds.add(currentPublisherKeyId);
@@ -166,7 +151,7 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
       const bundleId = bundleMatch[2]!;
       const locallyOriginated = exportedIdentities.has(publicIdentity(publisherKeyId, bundleId))
         || localPublisherKeyIds.has(publisherKeyId);
-      if (locallyOriginated && unlinkLocalCommunityFile(join(communityDir, entry.name), entry.name)) {
+      if (locallyOriginated && unlinkLocalCommunityFile(join(communityDir, entry.name))) {
         deletedCommunityBundles += 1;
       }
       continue;
@@ -176,14 +161,14 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
       const path = join(communityDir, entry.name);
       const publisherKeyId = communityObjectPublisherKeyId(path);
       if (publisherKeyId && localPublisherKeyIds.has(publisherKeyId)
-        && unlinkLocalCommunityFile(path, entry.name)) {
+        && unlinkLocalCommunityFile(path)) {
         deletedCommunityRevocations += 1;
       }
     }
   }
 
-  // Markers are purge-owned provenance only. Remove them last so any failure above can
-  // be retried without depending on the export or publisher key still being readable.
+  // Markers are purge-owned public provenance only. Remove them last. A corrupted
+  // marker cannot retain sensitive export bytes because mandatory deletion already ran.
   clearLocalPublicOrigins(configDir);
   return { deletedExports, deletedCommunityBundles, deletedCommunityRevocations };
 }
