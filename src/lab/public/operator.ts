@@ -2,6 +2,7 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
+  lstatSync,
   openSync,
   readFileSync,
 } from "node:fs";
@@ -9,10 +10,8 @@ import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
-import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
 import { recordLocalPublicOrigin } from "./origin";
-import { validatePublicEvidenceRecordPrivacy } from "./privacy";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
 import { projectPublicEvidenceRecord } from "./project";
 import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
@@ -34,14 +33,12 @@ const PRIVATE_STORAGE_LOCATOR = "<private>";
 const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
 export interface ProjectPublicEvidenceInput {
-  /** @deprecated V1 derives this only from records that remain exportable. */
-  createdDayUtc?: string;
   records: ProjectPublicEvidenceRecordInput[];
 }
 
 function utcDay(timestamp: number): string {
   const date = new Date(timestamp);
-  if (!Number.isFinite(date.getTime())) {
+  if (!Number.isInteger(timestamp) || timestamp < 0 || !Number.isFinite(date.getTime())) {
     throw new PublicEvidenceValidationError("public_selection_time", "selected observation has an invalid completion timestamp");
   }
   return date.toISOString().slice(0, 10);
@@ -61,18 +58,11 @@ export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
       excluded.push({ index, reason: projected.reason });
       return;
     }
-    try {
-      validatePublicEvidenceAuthorities([projected.record]);
-      validatePublicEvidenceRecordPrivacy(projected.record);
-      records.push(projected.record);
-      latestExportableCompletedAt = Math.max(
-        latestExportableCompletedAt ?? recordInput.observation.completedAt,
-        recordInput.observation.completedAt,
-      );
-    } catch (error) {
-      if (!(error instanceof PublicEvidenceValidationError)) throw error;
-      excluded.push({ index, reason: "unsafe_public_field" });
-    }
+    records.push(projected.record);
+    latestExportableCompletedAt = Math.max(
+      latestExportableCompletedAt ?? recordInput.observation.completedAt,
+      recordInput.observation.completedAt,
+    );
   });
   records.sort((a, b) => a.recordId.localeCompare(b.recordId));
   return {
@@ -255,11 +245,29 @@ export function summarizePublicEvidenceVerification(raw: unknown): PublicVerific
 }
 
 function readBoundedPublicFile(path: string): Buffer {
+  let pathStats;
+  try {
+    pathStats = lstatSync(path);
+  } catch (error) {
+    throw error;
+  }
+  if (pathStats.isSymbolicLink() || !pathStats.isFile() || pathStats.nlink !== 1) {
+    throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input must be a regular non-symlink file");
+  }
+  if (pathStats.size > MAX_PUBLIC_FILE_BYTES) {
+    throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
+  }
+
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
-      throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input must be a regular non-symlink file");
+    if (
+      !stats.isFile()
+      || stats.nlink !== 1
+      || stats.dev !== pathStats.dev
+      || stats.ino !== pathStats.ino
+    ) {
+      throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input changed or is not a private regular file");
     }
     if (stats.size > MAX_PUBLIC_FILE_BYTES) {
       throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
