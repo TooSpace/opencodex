@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PUBLIC_ROUTE_REGISTRY_V1, validatePublicRouteRegistryManifest } from "../src/lab/public";
 
-const REVIEWED_AUTHORITY_SOURCE_COMMIT = "1994d9ae0c018762dbf2a694fca068db380c55d0";
+const REVIEWED_AUTHORITY_SOURCE_COMMIT = "75a21417657ba5a3033198be0d8ae949de723d11";
 
 describe("CL-10 public route registry authority", () => {
   test("pins the reviewed OpenAI gpt-5.6-sol authority exactly", () => {
