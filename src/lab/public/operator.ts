@@ -1,22 +1,16 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
 import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
 import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
+import { readPrivateRegularFile } from "./file-safety";
 import { recordLocalPublicOrigin } from "./origin";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
 import { projectPublicEvidenceRecord } from "./project";
 import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
 import { storePublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
+import { publicUtcDay } from "./time";
 import { PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION, PUBLIC_EXPORT_POLICY_VERSION } from "./types";
 import type {
   PublicEvidenceBundleV1,
@@ -30,18 +24,9 @@ const MAX_OPERATOR_EVENTS = 256;
 const MAX_PUBLIC_FILE_BYTES = 2 * 1024 * 1024;
 const EMPTY_PREVIEW_DAY = "1970-01-01";
 const PRIVATE_STORAGE_LOCATOR = "<private>";
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
 export interface ProjectPublicEvidenceInput {
   records: ProjectPublicEvidenceRecordInput[];
-}
-
-function utcDay(timestamp: number): string {
-  const date = new Date(timestamp);
-  if (!Number.isInteger(timestamp) || timestamp < 0 || !Number.isFinite(date.getTime())) {
-    throw new PublicEvidenceValidationError("public_selection_time", "selected observation has an invalid completion timestamp");
-  }
-  return date.toISOString().slice(0, 10);
 }
 
 export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
@@ -71,7 +56,9 @@ export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
       exportPolicyVersion: PUBLIC_EXPORT_POLICY_VERSION,
       // Empty previews are intentionally unsignable and use a constant day so excluded
       // observation timestamps can never influence public output.
-      createdDayUtc: latestExportableCompletedAt === null ? EMPTY_PREVIEW_DAY : utcDay(latestExportableCompletedAt),
+      createdDayUtc: latestExportableCompletedAt === null
+        ? EMPTY_PREVIEW_DAY
+        : publicUtcDay(latestExportableCompletedAt),
       records,
       artifacts: [],
     },
@@ -245,41 +232,13 @@ export function summarizePublicEvidenceVerification(raw: unknown): PublicVerific
 }
 
 function readBoundedPublicFile(path: string): Buffer {
-  let pathStats;
-  try {
-    pathStats = lstatSync(path);
-  } catch (error) {
-    throw error;
-  }
-  if (pathStats.isSymbolicLink() || !pathStats.isFile() || pathStats.nlink !== 1) {
-    throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input must be a regular non-symlink file");
-  }
-  if (pathStats.size > MAX_PUBLIC_FILE_BYTES) {
-    throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
-  }
-
-  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-  try {
-    const stats = fstatSync(fd);
-    if (
-      !stats.isFile()
-      || stats.nlink !== 1
-      || stats.dev !== pathStats.dev
-      || stats.ino !== pathStats.ino
-    ) {
-      throw new PublicEvidenceValidationError("public_file_unsafe", "public evidence input changed or is not a private regular file");
-    }
-    if (stats.size > MAX_PUBLIC_FILE_BYTES) {
-      throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
-    }
-    const bytes = readFileSync(fd);
-    if (bytes.byteLength > MAX_PUBLIC_FILE_BYTES) {
-      throw new PublicEvidenceValidationError("public_file_too_large", "public evidence input exceeds 2 MiB");
-    }
-    return bytes;
-  } finally {
-    closeSync(fd);
-  }
+  return readPrivateRegularFile(path, {
+    maxBytes: MAX_PUBLIC_FILE_BYTES,
+    errorCode: "public_file_unsafe",
+    errorMessage: "public evidence input must be a regular non-symlink file",
+    sizeErrorCode: "public_file_too_large",
+    sizeErrorMessage: "public evidence input exceeds 2 MiB",
+  });
 }
 
 function parsePublicFile(path: string): unknown {
