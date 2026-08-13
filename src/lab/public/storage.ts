@@ -4,6 +4,7 @@ import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { readPrivateRegularFile } from "./file-safety";
+import { recordLocalPublicOrigin } from "./origin";
 import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { parseStrictPublicJson } from "./strict-json";
@@ -60,6 +61,15 @@ function validateLocalBundle(bundle: PublicEvidenceBundleV1): void {
   validatePublicEvidencePrivacy(bundle);
 }
 
+function completeLocalExportProvenance(
+  bundle: PublicEvidenceBundleV1,
+  result: { path: string; created: boolean },
+  configDir?: string,
+): { path: string; created: boolean } {
+  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
+  return result;
+}
+
 export function storePublicEvidenceBundle(
   bundle: PublicEvidenceBundleV1,
   configDir?: string,
@@ -72,17 +82,17 @@ export function storePublicEvidenceBundle(
   const path = bundlePath(bundle.bundleId, configDir);
   const existing = existingBody(path);
   if (existing !== null) {
-    if (existing === body) return { path, created: false };
+    if (existing === body) return completeLocalExportProvenance(bundle, { path, created: false }, configDir);
     throw new PublicEvidenceValidationError("public_export_conflict", "public export id collision with different bytes");
   }
 
   const published = publishPrivateFileExclusive(path, Buffer.from(body, "utf8"));
   if (!published.created) {
     const raced = existingBody(path);
-    if (raced === body) return { path, created: false };
+    if (raced === body) return completeLocalExportProvenance(bundle, { path, created: false }, configDir);
     throw new PublicEvidenceValidationError("public_export_conflict", "public export id collision with different bytes");
   }
-  return { path, created: true };
+  return completeLocalExportProvenance(bundle, { path, created: true }, configDir);
 }
 
 /** Backward-compatible local storage helper for callers that need the private path. */
