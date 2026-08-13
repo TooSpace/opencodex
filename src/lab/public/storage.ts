@@ -2,17 +2,15 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
-  fsyncSync,
   openSync,
   readFileSync,
-  unlinkSync,
-  writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { isSha256Hex, jcsStringify } from "../digest";
 import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
+import { publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { parseStrictPublicJson } from "./strict-json";
 import type { PublicEvidenceBundleV1 } from "./types";
@@ -81,7 +79,10 @@ function validateLocalBundle(bundle: PublicEvidenceBundleV1): void {
   validatePublicEvidencePrivacy(bundle);
 }
 
-export function writePublicEvidenceBundle(bundle: PublicEvidenceBundleV1, configDir?: string): string {
+export function storePublicEvidenceBundle(
+  bundle: PublicEvidenceBundleV1,
+  configDir?: string,
+): { path: string; created: boolean } {
   validateLocalBundle(bundle);
   const body = jcsStringify(bundle) + "\n";
   if (encodedBytes(body) > MAX_PUBLIC_BUNDLE_BYTES) {
@@ -90,31 +91,22 @@ export function writePublicEvidenceBundle(bundle: PublicEvidenceBundleV1, config
   const path = bundlePath(bundle.bundleId, configDir);
   const existing = existingBody(path);
   if (existing !== null) {
-    if (existing === body) return path;
+    if (existing === body) return { path, created: false };
     throw new PublicEvidenceValidationError("public_export_conflict", "public export id collision with different bytes");
   }
 
-  let fd: number | undefined;
-  let created = false;
-  try {
-    fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW, 0o600);
-    created = true;
-    writeFileSync(fd, body, { encoding: "utf8" });
-    fsyncSync(fd);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      const raced = existingBody(path);
-      if (raced === body) return path;
-      throw new PublicEvidenceValidationError("public_export_conflict", "public export id collision with different bytes");
-    }
-    if (created) {
-      try { unlinkSync(path); } catch { /* preserve original write failure */ }
-    }
-    throw error;
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  const published = publishPrivateFileExclusive(path, Buffer.from(body, "utf8"));
+  if (!published.created) {
+    const raced = existingBody(path);
+    if (raced === body) return { path, created: false };
+    throw new PublicEvidenceValidationError("public_export_conflict", "public export id collision with different bytes");
   }
-  return path;
+  return { path, created: true };
+}
+
+/** Backward-compatible local storage helper for callers that need the private path. */
+export function writePublicEvidenceBundle(bundle: PublicEvidenceBundleV1, configDir?: string): string {
+  return storePublicEvidenceBundle(bundle, configDir).path;
 }
 
 export function readPublicEvidenceBundle(bundleId: string, configDir?: string): PublicEvidenceBundleV1 {
