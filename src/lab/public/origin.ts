@@ -2,6 +2,7 @@ import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labCommunityDir, labPublicOriginDir } from "../paths";
+import { communityBundleFileName } from "./community-files";
 import { readPrivateRegularFile } from "./file-safety";
 import {
   cleanupStalePrivateFileStagesInDir,
@@ -88,7 +89,7 @@ function pathExistsConservatively(path: string): boolean {
 function communityBundlePath(identity: PublicOriginIdentityV1, configDir?: string): string {
   return join(
     labCommunityDir(configDir),
-    `bundle-${identity.publisherKeyId}-${identity.bundleId}.json`,
+    communityBundleFileName(identity.publisherKeyId, identity.bundleId),
   );
 }
 
