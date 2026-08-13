@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import type {
+  PublicArtifactV1,
   PublicEvidenceBundleUnsignedV1,
   PublicEvidenceBundleV1,
   PublicEvidenceRecordV1,
@@ -20,6 +21,15 @@ const FORBIDDEN_PUBLIC_STRING_PATTERNS: ReadonlyArray<{ label: string; pattern: 
   { label: "account/project/tenant context", pattern: /\b(?:account|tenant|project|organization|deployment)[=:][^\s]+/i },
   { label: "precise timestamp", pattern: /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/ },
 ];
+
+const PUBLIC_TEXT_ARTIFACT_MEDIA_TYPES = new Set([
+  "application/json",
+  "application/json; charset=utf-8",
+  "text/markdown",
+  "text/markdown; charset=utf-8",
+  "text/plain",
+  "text/plain; charset=utf-8",
+]);
 
 function assertPrivacySafeString(value: string, field: string): void {
   // `PUBLIC_IDENTIFIER` intentionally permits `:` for reviewed identifiers, so the
@@ -63,6 +73,36 @@ function scanSubject(subject: PublicEvidenceSubjectV1, field: string): void {
   assertPrivacySafeString(subject.fabricCompatibilityVersion, `${field}.fabricCompatibilityVersion`);
 }
 
+function scanArtifact(artifact: PublicArtifactV1, index: number): void {
+  const field = `bundle.artifacts[${index}]`;
+  assertPrivacySafeString(artifact.artifactClass, `${field}.artifactClass`);
+  assertPrivacySafeString(artifact.mediaType, `${field}.mediaType`);
+
+  if (!PUBLIC_TEXT_ARTIFACT_MEDIA_TYPES.has(artifact.mediaType.toLowerCase())) {
+    throw new PublicEvidenceValidationError(
+      "privacy_rejected",
+      `${field}.mediaType is not in the closed public text-artifact set`,
+    );
+  }
+  if (typeof artifact.contentBase64 !== "string") {
+    throw new PublicEvidenceValidationError("privacy_rejected", `${field}.contentBase64 is invalid`);
+  }
+  const bytes = Buffer.from(artifact.contentBase64, "base64");
+  if (bytes.toString("base64") !== artifact.contentBase64 || bytes.byteLength !== artifact.byteCount) {
+    throw new PublicEvidenceValidationError(
+      "privacy_rejected",
+      `${field}.contentBase64 is non-canonical or does not match byteCount`,
+    );
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new PublicEvidenceValidationError("privacy_rejected", `${field} is not valid UTF-8 text`);
+  }
+  assertPrivacySafeString(text, `${field}.content`);
+}
+
 export function validatePublicEvidenceRecordPrivacy(record: PublicEvidenceRecordV1): void {
   assertPrivacySafeString(record.suiteId, "record.suiteId");
   assertPrivacySafeString(record.suiteVersion, "record.suiteVersion");
@@ -79,15 +119,13 @@ export function validatePublicEvidenceRecordPrivacy(record: PublicEvidenceRecord
 
 /**
  * Second-pass CL-10 export privacy boundary. Hashes, signatures and publisher public-key
- * bytes are intentionally not pattern-scanned; every human-semantic public string is.
+ * bytes are intentionally not pattern-scanned; every human-semantic public string and
+ * every final text artifact byte is scanned before local signing/storage or import.
  */
 export function validatePublicEvidencePrivacy(
   bundle: PublicEvidenceBundleUnsignedV1 | PublicEvidenceBundleV1,
 ): void {
   assertPrivacySafeString(bundle.createdDayUtc, "bundle.createdDayUtc");
   for (const record of bundle.records) validatePublicEvidenceRecordPrivacy(record);
-  for (const [index, artifact] of bundle.artifacts.entries()) {
-    assertPrivacySafeString(artifact.artifactClass, `bundle.artifacts[${index}].artifactClass`);
-    assertPrivacySafeString(artifact.mediaType, `bundle.artifacts[${index}].mediaType`);
-  }
+  for (const [index, artifact] of bundle.artifacts.entries()) scanArtifact(artifact, index);
 }
