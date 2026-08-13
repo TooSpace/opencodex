@@ -9,15 +9,20 @@ import {
   closeSync,
   constants as fsConstants,
   fstatSync,
-  fsyncSync,
   openSync,
   readFileSync,
-  writeFileSync,
 } from "node:fs";
 import { ensureLabDirs, labPublicPublisherKeyPath } from "../paths";
-import { buildPublicEvidenceBundle, expectedPublicBundleIdentity, type BuildPublicEvidenceBundleInput } from "./bundle";
+import {
+  buildPublicEvidenceBundle,
+  expectedPublicBundleIdentity,
+  hasCanonicalPublicEvidenceOrder,
+  normalizePublicEvidenceContent,
+  type BuildPublicEvidenceBundleInput,
+} from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { publicEvidenceId } from "./ids";
+import { publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy, validatePublicEvidenceRecordPrivacy } from "./privacy";
 import type {
   PublicEvidenceBundleV1,
@@ -76,33 +81,27 @@ function createPrivateKeyFile(path: string): string {
     privateKeyEncoding: { type: "pkcs8", format: "pem" },
     publicKeyEncoding: { type: "spki", format: "pem" },
   });
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | O_NOFOLLOW, 0o600);
-    writeFileSync(fd, privateKey, { encoding: "utf8" });
-    fsyncSync(fd);
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
+  publishPrivateFileExclusive(path, Buffer.from(privateKey, "utf8"));
   return readRestrictedPrivateKey(path);
+}
+
+export function loadExistingPublicPublisher(configDir?: string): PublicPublisherHandle | null {
+  const privateKeyPath = labPublicPublisherKeyPath(configDir);
+  try {
+    const privateKeyPem = readRestrictedPrivateKey(privateKeyPath);
+    return { publisher: publisherForPrivateKey(privateKeyPem), privateKeyPath };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 export function getOrCreatePublicPublisher(configDir?: string): PublicPublisherHandle {
   ensureLabDirs(configDir);
+  const existing = loadExistingPublicPublisher(configDir);
+  if (existing) return existing;
   const privateKeyPath = labPublicPublisherKeyPath(configDir);
-  let privateKeyPem: string;
-  try {
-    privateKeyPem = readRestrictedPrivateKey(privateKeyPath);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") throw error;
-    try {
-      privateKeyPem = createPrivateKeyFile(privateKeyPath);
-    } catch (createError) {
-      if ((createError as NodeJS.ErrnoException).code !== "EEXIST") throw createError;
-      privateKeyPem = readRestrictedPrivateKey(privateKeyPath);
-    }
-  }
+  const privateKeyPem = createPrivateKeyFile(privateKeyPath);
   return { publisher: publisherForPrivateKey(privateKeyPem), privateKeyPath };
 }
 
@@ -129,20 +128,18 @@ function assertLocalArtifactExportAuthority(input: SignPublicEvidenceBundleInput
 }
 
 export function signPublicEvidenceBundle(input: SignPublicEvidenceBundleInput): PublicEvidenceBundleV1 {
-  // V1 has no trusted runtime handle proving a local artifact's policy explicitly
-  // grants public_export. Fail closed before key creation rather than treating local
-  // visibility or a caller-supplied artifactClass as export authority.
+  // Validate every caller-controlled invariant before publisher identity state is touched.
   assertLocalArtifactExportAuthority(input);
-  validatePublicEvidenceAuthorities(input.records);
-  for (const record of input.records) validatePublicEvidenceRecordPrivacy(record);
-
-  const handle = getOrCreatePublicPublisher(input.configDir);
-  const unsigned = buildPublicEvidenceBundle({
+  const normalized = normalizePublicEvidenceContent({
     records: input.records,
     artifacts: input.artifacts,
     createdDayUtc: input.createdDayUtc,
-    publisher: handle.publisher,
   });
+  validatePublicEvidenceAuthorities(normalized.records);
+  for (const record of normalized.records) validatePublicEvidenceRecordPrivacy(record);
+
+  const handle = getOrCreatePublicPublisher(input.configDir);
+  const unsigned = buildPublicEvidenceBundle({ ...normalized, publisher: handle.publisher });
   validatePublicEvidencePrivacy(unsigned);
   return {
     ...unsigned,
@@ -183,6 +180,7 @@ export function verifyPublicEvidenceBundle(bundle: PublicEvidenceBundleV1): Publ
     if (Object.keys(bundle.signature).some((key) => !["algorithm", "signedDigest", "signature"].includes(key))) {
       return { status: "schema_rejected" };
     }
+    if (!hasCanonicalPublicEvidenceOrder(bundle)) return { status: "schema_rejected" };
     const expected = expectedPublicBundleIdentity(bundle);
     if (bundle.bundleId !== expected.bundleId || bundle.bundleDigest !== expected.bundleDigest) {
       return { status: "digest_invalid" };
