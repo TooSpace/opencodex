@@ -132,17 +132,26 @@ function installNetworkCanary(): () => void {
 }
 
 describe("CL-10 CLI local public evidence", () => {
-  test("preview is network-free and does not create publisher or export state", async () => {
+  test("preview is network-free, identifier-safe, and does not create publisher or export state", async () => {
     const home = tempHome();
     const eventId = seedProtocolProjection(home);
+    const unknownEventId = "0".repeat(64);
     const restoreFetch = installNetworkCanary();
     try {
-      const result = await captureCli(["public", "preview", "--event", eventId, "--json"], home);
+      const result = await captureCli([
+        "public", "preview", "--event", eventId, "--event", unknownEventId, "--json",
+      ], home);
       expect(result.code).toBe(0);
-      const body = JSON.parse(result.stdout) as { bundle: { records: unknown[]; publisher?: unknown }; excluded: unknown[] };
+      const body = JSON.parse(result.stdout) as {
+        bundle: { records: unknown[]; publisher?: unknown };
+        excluded: Array<{ selectionIndex: number; reason: string; eventId?: string }>;
+      };
       expect(body.bundle.records).toHaveLength(1);
       expect(body.bundle).not.toHaveProperty("publisher");
-      expect(body.excluded).toEqual([]);
+      expect(body.excluded).toEqual([{ selectionIndex: 1, reason: "event_not_found" }]);
+      expect(body.excluded[0]).not.toHaveProperty("eventId");
+      expect(result.stdout).not.toContain(eventId);
+      expect(result.stdout).not.toContain(unknownEventId);
       expect(existsSync(labPublicPublisherKeyPath(home))).toBe(false);
       expect(existsSync(labExportDir(home)) ? readdirSync(labExportDir(home)) : []).toEqual([]);
       expect(result.stdout).not.toContain("PRIVATE-CANARY");
@@ -163,10 +172,12 @@ describe("CL-10 CLI local public evidence", () => {
         stored: { path: string; created: boolean };
       };
       expect(exportBody.bundle.publisher.keyId).toMatch(/^[0-9a-f]{64}$/);
-      expect(exportBody.stored.created).toBe(true);
-      expect(existsSync(exportBody.stored.path)).toBe(true);
+      expect(exportBody.stored).toEqual({ path: "<private>", created: true });
+      expect(exported.stdout).not.toContain(home);
+      const privateExportPath = join(labExportDir(home), `${exportBody.bundle.bundleId}.json`);
+      expect(existsSync(privateExportPath)).toBe(true);
 
-      const verified = await captureCli(["public", "verify", "--file", exportBody.stored.path, "--json"], home);
+      const verified = await captureCli(["public", "verify", "--file", privateExportPath, "--json"], home);
       expect(verified.code).toBe(0);
       expect(JSON.parse(verified.stdout)).toMatchObject({
         status: "cryptographically_valid",
@@ -177,13 +188,16 @@ describe("CL-10 CLI local public evidence", () => {
 
       const ledgerBefore = readFileSync(join(home, "lab", "compatibility.jsonl"));
       const sqliteBefore = readFileSync(join(home, "lab", "compatibility.sqlite"));
-      const imported = await captureCli(["public", "import", "--file", exportBody.stored.path, "--json"], home);
+      const imported = await captureCli(["public", "import", "--file", privateExportPath, "--json"], home);
       expect(imported.code).toBe(0);
-      expect(JSON.parse(imported.stdout)).toMatchObject({
+      const importedBody = JSON.parse(imported.stdout) as Record<string, unknown>;
+      expect(importedBody).toMatchObject({
         status: "cryptographically_valid",
         trustClass: "community_untrusted_v1",
         bundleId: exportBody.bundle.bundleId,
       });
+      expect(importedBody).not.toHaveProperty("path");
+      expect(imported.stdout).not.toContain(home);
       expect(readFileSync(join(home, "lab", "compatibility.jsonl")).equals(ledgerBefore)).toBe(true);
       expect(readFileSync(join(home, "lab", "compatibility.sqlite")).equals(sqliteBefore)).toBe(true);
 
@@ -231,7 +245,8 @@ describe("CL-10 management local public evidence", () => {
         bundle: { bundleId: string; publisher: { keyId: string } };
         stored: { path: string; created: boolean };
       };
-      expect(exportBody.stored.created).toBe(true);
+      expect(exportBody.stored).toEqual({ path: "<private>", created: true });
+      expect(JSON.stringify(exportBody)).not.toContain(home);
 
       const verified = await api(home, "/api/lab/public/verify", {
         method: "POST",
@@ -250,10 +265,13 @@ describe("CL-10 management local public evidence", () => {
         body: { bundle: exportBody.bundle },
       });
       expect(imported.status).toBe(200);
-      expect(await imported.json()).toMatchObject({
+      const importedBody = await imported.json() as Record<string, unknown>;
+      expect(importedBody).toMatchObject({
         status: "cryptographically_valid",
         trustClass: "community_untrusted_v1",
       });
+      expect(importedBody).not.toHaveProperty("path");
+      expect(JSON.stringify(importedBody)).not.toContain(home);
       expect(readFileSync(join(home, "lab", "compatibility.jsonl")).equals(ledgerBefore)).toBe(true);
 
       const community = await api(home, "/api/lab/public/community");
