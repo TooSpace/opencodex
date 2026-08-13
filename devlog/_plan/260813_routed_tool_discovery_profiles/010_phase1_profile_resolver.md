@@ -62,10 +62,12 @@ type ResolvedRoutedToolDiscoveryMode = "deferred" | "direct";
 - no client-version database;
 - no per-session mode mutation;
 - no claim that `direct` is cheaper or preferred.
-- no claim that `direct` restores *reachability* under code mode. Upstream
-  installs MCP tools on the `tools`/`ALL_TOOLS` globals in both modes; `direct`
-  only moves full schemas into `exec.description` at a measured payload cost
-  (`004`, `094` Correction 2).
+- no claim that `direct` restores *reachability* for an **eligible** tool under
+  code mode. Upstream installs such tools on the `tools`/`ALL_TOOLS` globals in
+  both modes; `direct` moves their full schemas into `exec.description` at a
+  measured payload cost and changes `tool_search` construction. It cannot repair
+  a tool removed by `direct_only_tool_namespaces`, `excluded_tool_namespaces`, or
+  MCP/App policy filtering (`004`, `094` Correction 2).
 
 ## Acceptance
 

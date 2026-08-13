@@ -74,9 +74,15 @@ consequences the plan must absorb:
 - The diagnostic in `014` must not claim the resolved catalog mode is the
   effective runtime mode. It can only report what OpenCodex advertises.
 
-## Correction 2 — under `code_mode_only`, MCP tools stay reachable in BOTH modes
+## Correction 2 — under `code_mode_only`, an *eligible* MCP tool stays reachable in BOTH modes
 
 This is the most important correction, and it strengthens the plan's default.
+
+**Scope, stated first.** This correction holds for an **ordinary eligible MCP
+tool** — one that already survived MCP/App visibility and policy filtering, is not
+in `direct_only_tool_namespaces`, and is not in `excluded_tool_namespaces`. It is
+not an unconditional statement about every tool on every surface. The exclusions
+are enumerated below and each is independent of `supports_search_tool`.
 
 `004` implies deferred discovery is what keeps tools reachable. In fact, under
 `ToolMode::CodeModeOnly` the nested tool specs are handed to the `exec` handler
@@ -100,15 +106,63 @@ let exposure = if search_tool_enabled { ToolExposure::Deferred } else { ToolExpo
 
 With `supports_search_tool = false`, the tools' **full declarations** move into
 `exec.description` because they enter `enabled_tools` rather than `deferred_tools`.
-That is precisely the 96,699 → 258,929 character regression #1596 measured. So the
-`direct` escape hatch buys **no additional callability under code mode** — it buys
-schema text inside `exec.description`.
+That is precisely the 96,699 → 258,929 character regression #1596 measured. So for
+an eligible tool the `direct` escape hatch buys **no additional callability under
+code mode** — it buys schema text inside `exec.description`.
 
-This reframes the override honestly: it is a *model-comprehension* lever (the model
-sees full schemas inline instead of having to consult `ALL_TOOLS`), not a
-*reachability* lever. `010`'s non-goal list already says "no claim that `direct` is
-cheaper or preferred"; it must also say direct is not a reachability fix under code
-mode. `044`'s weak-model fallback rationale is the honest use case.
+Confirmed by the upstream suite from both directions: a direct-exposure MCP tool
+reaches the globals (`core/tests/suite/code_mode.rs:3248`), and a deferred one does
+too (`core/tests/suite/code_mode.rs:644`).
+
+### What else the flag changes, and what it never controls
+
+Schema placement is the main difference but not the only one. Deferred exposure
+also drives `tool_search` construction and the deferred-tool guidance text
+(`spec_plan.rs:932`, `description.rs:10`).
+
+And three mechanisms remove a tool from the Code Mode globals **independently of
+this flag** — an override cannot fix any of them, and a reporter hitting one will
+look like a discovery failure:
+
+| Mechanism | Effect | Citation |
+|---|---|---|
+| `direct_only_tool_namespaces` | exposure becomes `DirectModelOnly`; the namespace stays top-level and is **excluded from Code Mode** | `spec_plan.rs:210` |
+| `excluded_tool_namespaces` | nested tools removed outright | `spec_plan.rs:444` |
+| MCP/App visibility and policy filtering | applied *before* exposure classification, so a filtered tool never reaches either path | `mcp_tool_exposure.rs:20` |
+
+The isolate is not exclusive to `code_mode_only`. `build_code_mode_executors()`
+returns early only when the mode is neither:
+
+```rust
+if !matches!(tool_mode, ToolMode::CodeMode | ToolMode::CodeModeOnly) {
+    return vec![];
+}
+```
+
+`spec_plan.rs:459`. So plain `ToolMode::CodeMode` also builds the `tools`/
+`ALL_TOOLS` globals, and the reachability reasoning holds there too; what
+`code_mode_only` adds is hiding ordinary nested tools from the **top-level** tool
+list. Only under `ToolMode::Direct` is there no isolate — and there
+`supports_search_tool` genuinely governs whether MCP tools are declared directly
+or must be found through `tool_search`. OpenCodex stamps every routed row
+`code_mode_only`, so `Direct` is not a routed-row concern today, but the
+distinction matters if that stamp is ever relaxed.
+
+### Required before the claim is load-bearing
+
+`020`/`021` must add one controlled test that toggles **only**
+`supports_search_tool` under otherwise identical `code_mode_only` conditions and
+asserts the tool remains callable in both, so this correction rests on an
+executed differential rather than on a source reading. The expected delta is
+`exec.description` content/size **plus** `tool_search` construction and the
+deferred-guidance text — not `exec.description` alone.
+
+This reframes the override honestly: for an eligible tool under code mode it is a
+*model-comprehension* lever (the model sees full schemas inline instead of having
+to consult `ALL_TOOLS`), not a *reachability* lever. `010`'s non-goal list already
+says "no claim that `direct` is cheaper or preferred"; it must also say direct is
+not a reachability fix for eligible tools under code mode. `044`'s weak-model
+fallback rationale is the honest use case.
 
 Caveat recorded rather than assumed away: the inspected clone is dated 2026-07-23,
 while #1522 reported against CLI `0.147.0-alpha.6.5` on 2026-08-12. Whether the

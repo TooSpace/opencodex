@@ -81,15 +81,19 @@ Change:
 normalizeRoutedCatalogEntry(entry, parallelToolCalls)
 ```
 
-into:
+into an options object — the fence needs the provider identity as well as the
+mode, and the existing positional arguments must stay put for the public callers
+(`src/codex/catalog.ts` re-export, `tests/parallel-tool-calls-optin.test.ts`):
 
 ```ts
 normalizeRoutedCatalogEntry(
   entry,
   parallelToolCalls,
-  toolDiscoveryMode,
+  { toolDiscoveryMode, providerId },
 )
 ```
+
+See `012` for the resolved snippet and the shared `isCursorRoute()` helper.
 
 The function still hard-fences Cursor to direct.
 

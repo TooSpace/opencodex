@@ -63,6 +63,7 @@
 091_pr_stack_and_commits.md
 092_definition_of_done.md
 093_execution_order.md
+094_landing_verification_pass.md
 KOREAN_SUMMARY.md
 README.md
 patches/0001-add-tool-discovery-module.patch

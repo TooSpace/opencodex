@@ -1,14 +1,31 @@
 #!/usr/bin/env node
 /**
- * Apply the phase-1 draft to a clean OpenCodex dev worktree.
+ * ARCHIVAL — KNOWN-DEFECTIVE — DO NOT EXECUTE.
  *
- * Usage:
+ * This applicator is retained as a SEAM MAP, not as an application path. It
+ * writes the Cursor-fence asymmetry described in
+ * ../094_landing_verification_pass.md Correction 8: the template path keeps
+ * `entry.slug.startsWith("cursor/")` while the template-less path keeps
+ * `model?.provider === "cursor"`, so a `cursor/`-aliased combo whose canonical
+ * provider is `combo` is classified differently depending on whether a template
+ * happened to be available. That is the unresolved #1596 P2 review finding.
+ *
+ * It also encodes the obsolete positional third argument to
+ * `normalizeRoutedCatalogEntry`; the plan now specifies an options object
+ * `{ toolDiscoveryMode, providerId }` and one shared `isCursorRoute()` helper
+ * used by BOTH construction paths (see ../012_phase1_catalog_patch.md).
+ *
+ * Crucially, `--check` still prints `draft seams: OK` while all of the above is
+ * true: it asserts only that the seams it expects are present, and knows nothing
+ * about policy correctness. A green run here is not a verdict.
+ *
+ * Read it for the `replaceOnce` anchors — they are an accurate map of where the
+ * real change lands. Do not run it against a repository you intend to commit
+ * from. The implementation PR's diff will not match this draft.
+ *
+ * Withdrawn usage (kept only so the anchors below read in context):
  *   node apply-draft.mjs --check /path/to/opencodex
  *   node apply-draft.mjs /path/to/opencodex
- *
- * The script is intentionally assertion-heavy: every current-dev seam must be
- * found exactly once or it exits without writing that file. Review git diff and
- * run scripts/run-repo-validation.sh afterward.
  */
 
 import fs from "node:fs";

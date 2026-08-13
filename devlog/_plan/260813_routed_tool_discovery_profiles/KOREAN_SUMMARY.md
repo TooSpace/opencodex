@@ -33,8 +33,8 @@ Cursor: direct discovery
 - 060–069: `search/describe/call` 3개 meta-tool 폴백
 - 070–079: 단계적 배포·관측·canary
 - 080–089: 롤백·장애 분류·설정 예시
-- 090–093: 최종 권고·PR 스택·완료 기준·실행 순서
-- `patches/apply-draft.mjs`: 현재 `dev` 코드 조각이 정확히 존재하는지 먼저 검사한 뒤 패치하는 스크립트
+- 090–094: 최종 권고·PR 스택·완료 기준·실행 순서·랜딩 검증
+- `patches/apply-draft.mjs`: seam 위치를 읽기 위한 보관용 스크립트 (실행 금지, 아래 참고)
 - `prototype/`: 의존성 없는 정책 프로토타입과 벤치마크
 - `results/`: 실행 결과와 한계
 
@@ -61,13 +61,14 @@ Cursor: direct discovery
 
 실제 작업트리에서 실행할 명령은 `scripts/run-repo-validation.sh`에 묶었습니다.
 
-## 적용 순서
+## 적용 순서 (2026-08-13 철회됨)
 
-```bash
-node patches/apply-draft.mjs --check /path/to/opencodex
-node patches/apply-draft.mjs /path/to/opencodex
-cd /path/to/opencodex
-/path/to/bundle/scripts/run-repo-validation.sh
-```
+`patches/apply-draft.mjs` 실행 절차는 삭제했습니다. 이 초안은 `094` 정정 8이
+지적한 Cursor 판정 불일치를 그대로 재현하면서도 `draft seams: OK`를 출력합니다.
+seam 위치를 읽는 참고 자료로만 쓰고, 커밋할 저장소에는 적용하지 마십시오.
+자세한 내용은 `patches/README.md`에 있습니다.
+
+실제 구현은 provider 신원을 먼저 보는 공용 헬퍼 하나로 템플릿 경로와
+템플릿 없는 경로를 모두 처리하므로, 이 초안과 diff가 일치하지 않습니다.
 
 적용 뒤에는 반드시 `git diff`를 리뷰하고, `042_codex_app_deepseek_browser.md`의 A/B 시나리오로 #1522의 정확한 조합을 확인해야 합니다.

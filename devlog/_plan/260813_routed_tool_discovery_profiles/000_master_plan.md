@@ -12,9 +12,12 @@ Base change: PR #1596, `fix(codex): restore deferred tool discovery for non-Curs
 > bundle was authored without a mounted checkout; every claim below was
 > re-verified on 2026-08-13 against a real worktree, the upstream `codex-rs`
 > source and live GitHub state. Eight corrections were recorded, the most
-> consequential being that under `code_mode_only` MCP tools stay callable in
-> **both** discovery modes — so `direct` is a comprehension/compatibility lever
-> with a payload cost, not a reachability fix.
+> consequential being that an **eligible** MCP tool stays callable in **both**
+> discovery modes under code mode — so for those tools `direct` is a
+> comprehension/compatibility lever with a payload cost, not a reachability fix.
+> "Eligible" excludes `direct_only_tool_namespaces`, `excluded_tool_namespaces`,
+> and anything removed by MCP/App policy filtering; see `094` for the exclusion
+> table and the differential test that must prove the claim.
 
 ## 1. Objective
 

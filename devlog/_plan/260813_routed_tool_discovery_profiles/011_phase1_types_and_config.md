@@ -53,6 +53,22 @@ A warning should state that the invalid policy was ignored.
 
 ### Write path
 
+> **Amended 2026-08-13 (`094` Correction 5 + audit blocker 3).** Two gaps between
+> this section's promises and the draft in `patches/`:
+>
+> 1. The draft adds `.catch(undefined)` but **no load-path warning**. Silent
+>    degradation is exactly the observability failure `014` exists to prevent —
+>    an operator whose emergency override was dropped by a typo must be told.
+>    The implementation must emit the warning, and a test must assert it.
+> 2. The accessor/prototype-pollution rejection below must be established
+>    **before** the validator enumerates or reads properties. A validator that
+>    reaches for `candidate.providers[name].modelRoutedToolDiscovery` and only
+>    then checks for getters has already run attacker-controlled code. Inspect
+>    with `Object.getOwnPropertyDescriptor` and reject non-data descriptors and
+>    non-own/prototype-sourced keys first, then read values.
+>
+> Both are first-PR requirements, not follow-ups.
+
 `validateConfigCandidate()` must inspect the raw candidate before `.catch()` can erase the invalid value. Reject:
 
 - unknown mode;
