@@ -10,7 +10,11 @@ import {
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labPublicOriginDir } from "../paths";
-import { publishPrivateFileExclusive } from "./private-file";
+import {
+  cleanupStalePrivateFileStagesInDir,
+  isPrivateFileStageName,
+  publishPrivateFileExclusive,
+} from "./private-file";
 import { parseStrictPublicJson } from "./strict-json";
 import { PublicEvidenceValidationError } from "./validate";
 
@@ -75,10 +79,15 @@ function readOrigin(path: string, expected?: PublicOriginIdentityV1): PublicOrig
   }
 }
 
+function originNames(dir: string): string[] {
+  cleanupStalePrivateFileStagesInDir(dir);
+  return readdirSync(dir).filter((name) => !isPrivateFileStageName(name)).sort();
+}
+
 export function recordLocalPublicOrigin(identity: PublicOriginIdentityV1, configDir?: string): void {
   ensureLabDirs(configDir);
   const dir = labPublicOriginDir(configDir);
-  const names = readdirSync(dir);
+  const names = originNames(dir);
   const path = originPath(identity, configDir);
   try {
     const existing = readOrigin(path, identity);
@@ -98,7 +107,7 @@ export function recordLocalPublicOrigin(identity: PublicOriginIdentityV1, config
 export function listLocalPublicOrigins(configDir?: string): PublicOriginIdentityV1[] {
   ensureLabDirs(configDir);
   const dir = labPublicOriginDir(configDir);
-  const names = readdirSync(dir).sort();
+  const names = originNames(dir);
   if (names.length > MAX_ORIGINS) {
     throw new PublicEvidenceValidationError("public_origin_bound", "public origin marker bound exceeded");
   }
@@ -117,6 +126,7 @@ export function listLocalPublicOrigins(configDir?: string): PublicOriginIdentity
 export function clearLocalPublicOrigins(configDir?: string): void {
   ensureLabDirs(configDir);
   const dir = labPublicOriginDir(configDir);
+  cleanupStalePrivateFileStagesInDir(dir);
   for (const name of readdirSync(dir)) {
     if (!ORIGIN_RE.test(name)) continue;
     try { unlinkSync(join(dir, name)); } catch (error) {
