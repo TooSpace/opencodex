@@ -5,13 +5,6 @@ import {
   sign as signBytes,
   verify as verifyBytes,
 } from "node:crypto";
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
 import { ensureLabDirs, labPublicPublisherKeyPath } from "../paths";
 import {
   buildPublicEvidenceBundle,
@@ -21,6 +14,7 @@ import {
   type BuildPublicEvidenceBundleInput,
 } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
+import { readPrivateRegularFile } from "./file-safety";
 import { publicEvidenceId } from "./ids";
 import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy, validatePublicEvidenceRecordPrivacy } from "./privacy";
@@ -30,7 +24,6 @@ import type {
 } from "./types";
 import { PublicEvidenceValidationError } from "./validate";
 
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 
 export interface PublicPublisherHandle {
@@ -54,27 +47,17 @@ function publisherForPrivateKey(privateKeyPem: string): PublicPublisherV1 {
 
 function readRestrictedPrivateKey(path: string): string {
   cleanupStalePrivateFileStages(path);
-  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-  try {
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_PRIVATE_KEY_BYTES) {
-      throw new Error("public publisher key path is not a bounded private regular file");
-    }
-    if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
-      throw new Error("public publisher key permissions must be 0600");
-    }
-    const pem = readFileSync(fd, "utf8");
-    if (Buffer.byteLength(pem, "utf8") > MAX_PRIVATE_KEY_BYTES) {
-      throw new Error("public publisher key exceeds size bound");
-    }
-    const key = createPrivateKey(pem);
-    if (key.asymmetricKeyType !== "ed25519") {
-      throw new Error("public publisher key must be Ed25519");
-    }
-    return pem;
-  } finally {
-    closeSync(fd);
+  const pem = readPrivateRegularFile(path, {
+    maxBytes: MAX_PRIVATE_KEY_BYTES,
+    errorCode: "public_publisher_key_unsafe",
+    errorMessage: "public publisher key path is not a bounded private regular file with 0600 permissions",
+    requireMode600: true,
+  }).toString("utf8");
+  const key = createPrivateKey(pem);
+  if (key.asymmetricKeyType !== "ed25519") {
+    throw new Error("public publisher key must be Ed25519");
   }
+  return pem;
 }
 
 function createPrivateKeyFile(path: string): string {
