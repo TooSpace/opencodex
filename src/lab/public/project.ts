@@ -1,6 +1,8 @@
 import type { CompatibilityVerdict } from "../constants";
 import type { ObservationEvent, ProtocolSubjectV1 } from "../events/types";
+import { validatePublicEvidenceAuthorities } from "./community-authority";
 import { publicEvidenceId } from "./ids";
+import { validatePublicEvidenceRecordPrivacy } from "./privacy";
 import {
   PUBLIC_ADAPTER_FAMILIES,
   type PublicAdapterFamily,
@@ -9,7 +11,11 @@ import {
   type PublicIncidentRefV1,
   type PublicProtocolSubjectV1,
 } from "./types";
-import { isPublicIncidentRef, validatePublicEvidenceRecord } from "./validate";
+import {
+  isPublicIncidentRef,
+  PublicEvidenceValidationError,
+  validatePublicEvidenceRecord,
+} from "./validate";
 
 export interface ProjectPublicEvidenceRecordInput {
   observation: ObservationEvent;
@@ -20,9 +26,13 @@ export interface ProjectPublicEvidenceRecordInput {
 
 function utcDay(timestampMs: number): string {
   if (!Number.isInteger(timestampMs) || timestampMs < 0) {
-    throw new Error("invalid observation completion timestamp");
+    throw new PublicEvidenceValidationError("public_selection_time", "invalid observation completion timestamp");
   }
-  return new Date(timestampMs).toISOString().slice(0, 10);
+  const date = new Date(timestampMs);
+  if (!Number.isFinite(date.getTime())) {
+    throw new PublicEvidenceValidationError("public_selection_time", "invalid observation completion timestamp");
+  }
+  return date.toISOString().slice(0, 10);
 }
 
 function asPublicAdapterFamily(value: string): PublicAdapterFamily | undefined {
@@ -51,7 +61,8 @@ function projectIncidentRefs(values: string[] | undefined): PublicIncidentRefV1[
 }
 
 /**
- * Project one local observation into the closed public V1 record shape.
+ * Project one local observation into the closed public V1 record shape and apply the
+ * complete reviewed authority/privacy boundary before exposing it as exportable.
  *
  * Route and task observations deliberately fail closed here. Persisted RouteSubjectV1
  * contains installation-salted provider-instance and endpoint identity, so the exact
@@ -78,29 +89,37 @@ export function projectPublicEvidenceRecord(
     return { status: "not_exportable", reason: "unsafe_public_field" };
   }
 
-  const subjectId = publicEvidenceId("subject", subject);
-  const withoutRecordId: Omit<PublicEvidenceRecordV1, "recordId"> = {
-    subjectId,
-    evidenceLayer: "protocol_conformance",
-    suiteId: observation.suiteId,
-    suiteVersion: observation.suiteVersion,
-    scenarioId: observation.scenarioId,
-    scenarioVersion: observation.scenarioVersion,
-    verdict: input.verdict,
-    observedDayUtc: utcDay(observation.completedAt),
-    subject,
-    assertions: observation.assertions.map((assertion) => ({
-      id: assertion.id,
-      required: assertion.required,
-      passed: assertion.passed,
-    })),
-    ...(incidentRefs !== undefined ? { incidentRefs } : {}),
-    ...(input.publicArtifactRefs !== undefined ? { artifactRefs: [...input.publicArtifactRefs] } : {}),
-  };
-  const record: PublicEvidenceRecordV1 = {
-    recordId: publicEvidenceId("record", withoutRecordId),
-    ...withoutRecordId,
-  };
-
-  return { status: "exportable", record: validatePublicEvidenceRecord(record) };
+  try {
+    const subjectId = publicEvidenceId("subject", subject);
+    const withoutRecordId: Omit<PublicEvidenceRecordV1, "recordId"> = {
+      subjectId,
+      evidenceLayer: "protocol_conformance",
+      suiteId: observation.suiteId,
+      suiteVersion: observation.suiteVersion,
+      scenarioId: observation.scenarioId,
+      scenarioVersion: observation.scenarioVersion,
+      verdict: input.verdict,
+      observedDayUtc: utcDay(observation.completedAt),
+      subject,
+      assertions: observation.assertions.map((assertion) => ({
+        id: assertion.id,
+        required: assertion.required,
+        passed: assertion.passed,
+      })),
+      ...(incidentRefs !== undefined ? { incidentRefs } : {}),
+      ...(input.publicArtifactRefs !== undefined ? { artifactRefs: [...input.publicArtifactRefs] } : {}),
+    };
+    const record = validatePublicEvidenceRecord({
+      recordId: publicEvidenceId("record", withoutRecordId),
+      ...withoutRecordId,
+    });
+    validatePublicEvidenceAuthorities([record]);
+    validatePublicEvidenceRecordPrivacy(record);
+    return { status: "exportable", record };
+  } catch (error) {
+    if (error instanceof PublicEvidenceValidationError) {
+      return { status: "not_exportable", reason: "unsafe_public_field" };
+    }
+    throw error;
+  }
 }
