@@ -5,9 +5,9 @@ import type {
   PublicRouteRegistryManifestV1,
 } from "./types";
 
-// Authority snapshot: the last fully green exact PR head reviewed before this
-// manifest narrowing. Its tree contains both the provider authority and registry.
-const PUBLIC_ROUTE_REGISTRY_SOURCE_COMMIT = "1994d9ae0c018762dbf2a694fca068db380c55d0";
+// Repository-authoritative provider/model/adapter snapshot. The public manifest
+// itself is independently content-addressed by manifestDigest below.
+const PUBLIC_ROUTE_REGISTRY_SOURCE_COMMIT = "75a21417657ba5a3033198be0d8ae949de723d11";
 
 const entries: PublicRouteRegistryEntryV1[] = [
   {
