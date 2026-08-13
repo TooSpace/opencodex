@@ -19,6 +19,16 @@ const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
 const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 const COMMUNITY_REVOCATION_RE = /^revocation-([0-9a-f]{64})\.json$/;
 
+type PublicEvidencePurgeFaultForTests = "before_export_delete";
+let purgeFaultForTests: PublicEvidencePurgeFaultForTests | null = null;
+
+/** Internal deterministic fault seam. Import this module directly in tests. */
+export function setPublicEvidencePurgeFaultForTests(
+  fault: PublicEvidencePurgeFaultForTests | null,
+): void {
+  purgeFaultForTests = fault;
+}
+
 /**
  * Publisher provenance is useful only for classifying local community copies. A corrupt
  * key must never block deletion of sensitive exports, so classification fails closed to
@@ -66,6 +76,9 @@ function localExportIdentities(configDir?: string): Set<string> {
 }
 
 function purgeAllExports(configDir?: string): number {
+  if (purgeFaultForTests === "before_export_delete") {
+    throw new Error("synthetic public export purge failure");
+  }
   let deleted = 0;
   const exportDir = labExportDir(configDir);
   for (const entry of readdirSync(exportDir, { withFileTypes: true })) {
