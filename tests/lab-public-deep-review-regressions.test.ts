@@ -53,7 +53,11 @@ function fixedRecord(overrides: Partial<Omit<PublicEvidenceRecordV1, "recordId" 
     verdict: "VERIFIED" as const,
     observedDayUtc: "2026-08-12",
     subject,
-    assertions: [{ id: "method", required: true, passed: true }],
+    assertions: [
+      { id: "method", required: true, passed: true },
+      { id: "message", required: true, passed: true },
+      { id: "temperature", required: true, passed: true },
+    ],
     ...overrides,
   };
   return { recordId: publicEvidenceId("record", withoutRecordId), ...withoutRecordId };
@@ -188,6 +192,8 @@ describe("CL-10 deep-review trust regressions", () => {
     const missing = rebuildRecord(base, { assertions: [] });
     const duplicate = rebuildRecord(base, { assertions: [
       { id: "method", required: true, passed: true },
+      { id: "message", required: true, passed: true },
+      { id: "temperature", required: true, passed: true },
       { id: "method", required: true, passed: false },
     ] });
 
