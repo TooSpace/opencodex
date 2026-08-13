@@ -67,7 +67,11 @@ function observation(): ObservationEvent {
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
-    assertions: [{ id: "method", operator: "equals", required: true, passed: true }],
+    assertions: [
+      { id: "method", operator: "equals", required: true, passed: true },
+      { id: "message", operator: "equals", required: true, passed: true },
+      { id: "temperature", operator: "equals", required: true, passed: true },
+    ],
     environment: {},
     artifactRefs: [],
   }) as ObservationEvent;
