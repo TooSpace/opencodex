@@ -1,16 +1,9 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readdirSync,
-  readFileSync,
-  unlinkSync,
-} from "node:fs";
+import { readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { validateCommunityEvidenceAuthorities } from "./community-authority";
+import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
 import {
   cleanupStalePrivateFileStages,
   cleanupStalePrivateFileStagesInDir,
@@ -35,9 +28,16 @@ const MAX_DEPTH = 8;
 const MAX_OBJECT_KEYS = 64;
 const MAX_ARRAY_ELEMENTS = 512;
 const MAX_GENERIC_STRING_BYTES = 384 * 1024;
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 const COMMUNITY_BUNDLE_FILE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 const COMMUNITY_REVOCATION_FILE_RE = /^revocation-([0-9a-f]{64})\.json$/;
+
+const COMMUNITY_FILE_OPTIONS = {
+  maxBytes: MAX_IMPORT_BYTES,
+  errorCode: "community_unsafe_target",
+  errorMessage: "community object is not a bounded private regular file",
+  sizeErrorCode: "community_size",
+  sizeErrorMessage: "community file exceeds bound",
+} as const;
 
 function assertId(value: string): string {
   if (!/^[0-9a-f]{64}$/.test(value)) {
@@ -78,11 +78,17 @@ function scanStructure(value: unknown, depth = 0): void {
 }
 
 function boundedInput(raw: unknown): unknown {
-  const bytes = raw instanceof Uint8Array
-    ? Buffer.from(raw)
-    : typeof raw === "string"
-      ? Buffer.from(raw, "utf8")
-      : Buffer.from(jcsStringify(raw), "utf8");
+  let bytes: Buffer;
+  if (raw instanceof Uint8Array) {
+    bytes = Buffer.from(raw);
+  } else if (typeof raw === "string") {
+    bytes = Buffer.from(raw, "utf8");
+  } else {
+    // Bound already-decoded values before recursive JCS canonicalization can allocate
+    // or overflow on attacker-controlled depth/width.
+    scanStructure(raw);
+    bytes = Buffer.from(jcsStringify(raw), "utf8");
+  }
   if (bytes.byteLength > MAX_IMPORT_BYTES) {
     throw new PublicEvidenceValidationError("community_size", "community import exceeds 2 MiB");
   }
@@ -119,27 +125,9 @@ function revocationObjectPath(revocationId: string, configDir?: string): string 
   return join(labCommunityDir(configDir), `revocation-${assertId(revocationId)}.json`);
 }
 
-function assertRegular(path: string, fd: number): number {
-  const stats = fstatSync(fd);
-  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1 || stats.size > MAX_IMPORT_BYTES) {
-    throw new PublicEvidenceValidationError("community_unsafe_target", `unsafe community file: ${path}`);
-  }
-  return stats.size;
-}
-
 function readBounded(path: string): Buffer {
   cleanupStalePrivateFileStages(path);
-  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-  try {
-    assertRegular(path, fd);
-    const bytes = readFileSync(fd);
-    if (bytes.byteLength > MAX_IMPORT_BYTES) {
-      throw new PublicEvidenceValidationError("community_size", "community file exceeds bound");
-    }
-    return bytes;
-  } finally {
-    closeSync(fd);
-  }
+  return readPrivateRegularFile(path, COMMUNITY_FILE_OPTIONS);
 }
 
 function cacheUsage(configDir?: string): { names: string[]; bytes: number } {
@@ -152,13 +140,7 @@ function cacheUsage(configDir?: string): { names: string[]; bytes: number } {
   }
   let bytes = 0;
   for (const name of names) {
-    const path = join(dir, name);
-    const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-    try {
-      bytes += assertRegular(path, fd);
-    } finally {
-      closeSync(fd);
-    }
+    bytes += privateRegularFileSize(join(dir, name), COMMUNITY_FILE_OPTIONS);
     if (bytes > MAX_CACHE_BYTES) {
       throw new PublicEvidenceValidationError("community_cache_bound", "community cache byte bound exceeded");
     }
