@@ -168,6 +168,7 @@ function persistAt(path: string, kind: "bundle" | "revocation", value: unknown, 
     }
     return { path, created: false };
   } catch (error) {
+    if (error instanceof PublicEvidenceValidationError) throw error;
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 
