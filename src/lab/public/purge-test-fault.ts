@@ -1,4 +1,7 @@
-export type PublicEvidencePurgeFaultForTests = "before_export_delete" | null;
+export type PublicEvidencePurgeFaultForTests =
+  | "before_export_delete"
+  | "export_directory_sync"
+  | null;
 
 let purgeFaultForTests: PublicEvidencePurgeFaultForTests = null;
 
