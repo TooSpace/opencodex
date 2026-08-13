@@ -2,12 +2,20 @@ import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
-import { importCommunityEvidenceBundle, listCommunityEvidence } from "./community";
+import {
+  importCommunityEvidenceBundle,
+  listCommunityEvidence,
+  readCommunityEvidenceBundleForPublisher,
+} from "./community";
 import { readPrivateRegularFile } from "./file-safety";
 import { recordLocalPublicOrigin } from "./origin";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
 import { projectPublicEvidenceRecord } from "./project";
-import { signPublicEvidenceBundle, verifyPublicEvidenceBundle } from "./signature";
+import {
+  loadExistingPublicPublisher,
+  signPublicEvidenceBundle,
+  verifyPublicEvidenceBundle,
+} from "./signature";
 import { storePublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
 import { publicUtcDay } from "./time";
@@ -54,8 +62,6 @@ export function projectPublicEvidence(input: ProjectPublicEvidenceInput): {
     bundle: {
       schemaVersion: PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION,
       exportPolicyVersion: PUBLIC_EXPORT_POLICY_VERSION,
-      // Empty previews are intentionally unsignable and use a constant day so excluded
-      // observation timestamps can never influence public output.
       createdDayUtc: latestExportableCompletedAt === null
         ? EMPTY_PREVIEW_DAY
         : publicUtcDay(latestExportableCompletedAt),
@@ -74,7 +80,6 @@ export type PublicOperatorExclusionReason =
   | "no_canonical_verdict";
 
 export interface PublicOperatorExclusionV1 {
-  /** Index into the caller's submitted selection, never a local Lab identifier. */
   selectionIndex: number;
   reason: PublicOperatorExclusionReason;
 }
@@ -86,7 +91,6 @@ export interface LocalPublicPreviewV1 {
 
 export interface LocalPublicExportV1 {
   bundle: PublicEvidenceBundleV1;
-  /** `path` is deliberately opaque on public surfaces; real paths stay storage-internal. */
   stored: { path: typeof PRIVATE_STORAGE_LOCATOR; created: boolean };
   excluded: PublicOperatorExclusionV1[];
 }
@@ -206,8 +210,6 @@ export function exportLocalPublicEvidence(
     createdDayUtc: preview.bundle.createdDayUtc,
     configDir,
   });
-  // Persist provenance before the export file so no successfully-created local export can
-  // exist without purge-owned origin evidence. An orphan marker is conservative and safe.
   recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
   const stored = storePublicEvidenceBundle(bundle, configDir);
   return {
@@ -249,13 +251,30 @@ export function verifyPublicEvidenceFile(path: string): PublicVerificationSummar
   return summarizePublicEvidenceVerification(parsePublicFile(path));
 }
 
+function restoreImportedLocalOrigin(
+  imported: { bundleId: string; publisherKeyId: string },
+  configDir?: string,
+): void {
+  const local = loadExistingPublicPublisher(configDir);
+  if (!local) return;
+  const bundle = readCommunityEvidenceBundleForPublisher(imported.bundleId, imported.publisherKeyId, configDir);
+  if (
+    local.publisher.algorithm !== bundle.publisher.algorithm
+    || local.publisher.keyId !== bundle.publisher.keyId
+    || local.publisher.publicKey !== bundle.publisher.publicKey
+  ) return;
+  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
+}
+
 export function importCommunityEvidenceFile(path: string, configDir?: string) {
   const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(readBoundedPublicFile(path), configDir);
+  restoreImportedLocalOrigin(imported, configDir);
   return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
 }
 
 export function importCommunityEvidenceValue(raw: unknown, configDir?: string) {
   const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(raw, configDir);
+  restoreImportedLocalOrigin(imported, configDir);
   return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
 }
 
