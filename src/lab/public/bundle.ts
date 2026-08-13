@@ -146,17 +146,26 @@ export function normalizePublicEvidenceContent(input: PublicEvidenceContentInput
   return { records, artifacts, createdDayUtc: utcDay(input.createdDayUtc) };
 }
 
-export function hasCanonicalPublicEvidenceOrder(input: PublicEvidenceContentInput): boolean {
+export function canonicalPublicEvidenceContent(
+  input: PublicEvidenceContentInput,
+): { canonical: boolean; normalized: PublicEvidenceContentInput } {
   const normalized = normalizePublicEvidenceContent(input);
-  return input.records.length === normalized.records.length
+  const canonical = input.records.length === normalized.records.length
     && input.artifacts.length === normalized.artifacts.length
     && input.records.every((record, index) => record.recordId === normalized.records[index]!.recordId)
     && input.artifacts.every((artifact, index) => artifact.artifactId === normalized.artifacts[index]!.artifactId);
+  return { canonical, normalized };
 }
 
-export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput): PublicEvidenceBundleUnsignedV1 {
-  const normalized = normalizePublicEvidenceContent(input);
-  const publisher = validatePublisher(input.publisher);
+export function hasCanonicalPublicEvidenceOrder(input: PublicEvidenceContentInput): boolean {
+  return canonicalPublicEvidenceContent(input).canonical;
+}
+
+function buildFromNormalizedContent(
+  normalized: PublicEvidenceContentInput,
+  publisherInput: PublicPublisherV1,
+): PublicEvidenceBundleUnsignedV1 {
+  const publisher = validatePublisher(publisherInput);
   const content = {
     schemaVersion: PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION,
     exportPolicyVersion: PUBLIC_EXPORT_POLICY_VERSION,
@@ -174,12 +183,25 @@ export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput)
   return bundle;
 }
 
-export function expectedPublicBundleIdentity(bundle: PublicEvidenceBundleUnsignedV1): { bundleId: string; bundleDigest: string } {
-  const rebuilt = buildPublicEvidenceBundle({
-    records: bundle.records,
-    artifacts: bundle.artifacts,
-    createdDayUtc: bundle.createdDayUtc,
-    publisher: bundle.publisher,
-  });
+export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput): PublicEvidenceBundleUnsignedV1 {
+  return buildFromNormalizedContent(normalizePublicEvidenceContent(input), input.publisher);
+}
+
+export function expectedPublicBundleIdentityFromNormalized(
+  normalized: PublicEvidenceContentInput,
+  publisher: PublicPublisherV1,
+): { bundleId: string; bundleDigest: string } {
+  const rebuilt = buildFromNormalizedContent(normalized, publisher);
   return { bundleId: rebuilt.bundleId, bundleDigest: rebuilt.bundleDigest };
+}
+
+export function expectedPublicBundleIdentity(bundle: PublicEvidenceBundleUnsignedV1): { bundleId: string; bundleDigest: string } {
+  return expectedPublicBundleIdentityFromNormalized(
+    normalizePublicEvidenceContent({
+      records: bundle.records,
+      artifacts: bundle.artifacts,
+      createdDayUtc: bundle.createdDayUtc,
+    }),
+    bundle.publisher,
+  );
 }
