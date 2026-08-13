@@ -124,6 +124,16 @@ test("operator import of an own verified bundle restores missing local-origin pr
   }]);
 });
 
+test("operator import of a third-party verified bundle does not create local-origin provenance", () => {
+  const home = configDir("ocx-cl10-origin-third-party-home-");
+  const publisher = configDir("ocx-cl10-origin-third-party-publisher-");
+  signedBundle(home);
+  const bundle = signedBundle(publisher);
+
+  importCommunityEvidenceValue(bundle, home);
+  expect(listLocalPublicOrigins(home)).toEqual([]);
+});
+
 test("origin and community persistence recover after same-process parent-directory sync failures", () => {
   if (process.platform === "win32") return;
   const home = configDir("ocx-cl10-origin-recovery-");
