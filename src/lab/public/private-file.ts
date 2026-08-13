@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-export type PrivateFileCommitFault = "before_publish" | null;
+export type PrivateFileCommitFault = "before_publish" | "parent_directory_sync" | null;
 let privateFileCommitFaultForTests: PrivateFileCommitFault = null;
 const PRIVATE_STAGE_RE = /^\..+\.(\d+)\.[0-9a-f-]{36}\.tmp$/;
 
@@ -34,13 +34,34 @@ function staleTempPrefix(finalPath: string): string {
 }
 
 function fsyncParentBestEffort(path: string): void {
+  if (process.platform === "win32") return;
   let fd: number | null = null;
   try {
     fd = openSync(dirname(path), fsConstants.O_RDONLY);
     fsyncSync(fd);
   } catch {
-    // Directory fsync is unavailable on some supported platforms/filesystems.
-    // File fsync plus exclusive publication still prevents partial final files.
+    // Cleanup durability is best-effort. Publication durability uses the strict
+    // fsyncParentForPublication path below and never swallows POSIX failures.
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+
+function fsyncParentForPublication(path: string): void {
+  // Node does not provide a portable directory-fsync contract on Windows. The
+  // exclusive hard-link publication remains atomic there, while POSIX requires
+  // the parent directory sync before publication is reported as durable.
+  if (process.platform === "win32") return;
+  if (privateFileCommitFaultForTests === "parent_directory_sync") {
+    throw new Error("synthetic private-file parent directory sync failure");
+  }
+  let fd: number | null = null;
+  try {
+    fd = openSync(dirname(path), fsConstants.O_RDONLY);
+    fsyncSync(fd);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("synthetic private-file")) throw error;
+    throw new Error("private-file parent directory sync failed");
   } finally {
     if (fd !== null) closeSync(fd);
   }
@@ -129,10 +150,15 @@ export function publishPrivateFileExclusive(
     try {
       linkSync(tempPath, finalPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return { created: false };
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        // A prior publication may have linked the final entry but failed while
+        // syncing the parent directory. Re-sync before reporting idempotent success.
+        fsyncParentForPublication(finalPath);
+        return { created: false };
+      }
       throw error;
     }
-    fsyncParentBestEffort(finalPath);
+    fsyncParentForPublication(finalPath);
     return { created: true };
   } finally {
     if (fd !== null) closeSync(fd);
