@@ -26,12 +26,31 @@ function validateAssertionAuthority(
   assertions: readonly { id: string; required: boolean }[],
 ): void {
   const allowed = new Map(assertions.map((assertion) => [assertion.id, assertion.required] as const));
+  if (allowed.size !== assertions.length) {
+    throw new PublicEvidenceValidationError("public_authority", "reviewed scenario assertion authority contains duplicates");
+  }
+  if (record.assertions.length !== allowed.size) {
+    throw new PublicEvidenceValidationError(
+      "public_authority",
+      "public assertion set does not exactly match reviewed scenario authority",
+    );
+  }
+  const seen = new Set<string>();
   for (const assertion of record.assertions) {
+    if (seen.has(assertion.id)) {
+      throw new PublicEvidenceValidationError("public_authority", "public assertion set contains duplicate assertion ids");
+    }
+    seen.add(assertion.id);
     if (!allowed.has(assertion.id) || allowed.get(assertion.id) !== assertion.required) {
       throw new PublicEvidenceValidationError(
         "public_authority",
         "public assertion id/required flag is not in reviewed scenario authority",
       );
+    }
+  }
+  for (const assertionId of allowed.keys()) {
+    if (!seen.has(assertionId)) {
+      throw new PublicEvidenceValidationError("public_authority", "public assertion set is missing reviewed scenario authority");
     }
   }
 }
