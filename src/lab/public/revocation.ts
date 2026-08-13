@@ -1,6 +1,10 @@
 import { createPublicKey, verify as verifyBytes } from "node:crypto";
 import { publicEvidenceId } from "./ids";
-import { getOrCreatePublicPublisher, signPublicPublisherDigest } from "./signature";
+import {
+  loadExistingPublicPublisher,
+  signPublicPublisherDigest,
+  verifyPublicEvidenceBundle,
+} from "./signature";
 import {
   PUBLIC_EVIDENCE_REVOCATION_SCHEMA_VERSION,
   type PublicEvidenceBundleV1,
@@ -90,9 +94,9 @@ export function createPublicEvidenceRevocation(input: {
   targets: PublicRevocationTargetV1[];
   reason: PublicRevocationReasonV1;
 }): PublicEvidenceRevocationV1 {
-  const handle = getOrCreatePublicPublisher(input.configDir);
-  if (!samePublisher(handle.publisher, input.targetBundle.publisher)) {
-    throw new PublicEvidenceValidationError("revocation_publisher", "revocation publisher must exactly match target bundle publisher");
+  // Validate the target and every caller-controlled field before touching publisher state.
+  if (verifyPublicEvidenceBundle(input.targetBundle).status !== "cryptographically_valid") {
+    throw new PublicEvidenceValidationError("revocation_target", "revocation target bundle is not cryptographically valid");
   }
   if (!validDay(input.issuedDayUtc)) {
     throw new PublicEvidenceValidationError("revocation_day", "issuedDayUtc is invalid");
@@ -103,6 +107,14 @@ export function createPublicEvidenceRevocation(input: {
   const targets = canonicalTargets(input.targets);
   if (!validateTargetsAgainstBundle(targets, input.targetBundle)) {
     throw new PublicEvidenceValidationError("revocation_target", "revocation target is unknown to target bundle");
+  }
+
+  const handle = loadExistingPublicPublisher(input.configDir);
+  if (!handle || !samePublisher(handle.publisher, input.targetBundle.publisher)) {
+    throw new PublicEvidenceValidationError(
+      "revocation_publisher",
+      "revocation requires the existing publisher key that signed the target bundle",
+    );
   }
   const revocationId = publicEvidenceId(
     "revocation",
