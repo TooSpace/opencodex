@@ -487,8 +487,10 @@ describe("routed tool-discovery backward compatibility", () => {
   });
 
   it("warns when a blank model key silently drops the whole map on load", () => {
-    // `z.string().min(1)` rejects the key and takes the entire map with it, so a
-    // value-only warning would let the map vanish without a word.
+    // The trimmed-nonblank refinement rejects the key and takes the entire map with it, so
+    // a value-only warning would let the map vanish without a word. The fixture is
+    // whitespace-only on purpose: `.min(1)` accepts it, so an empty-string fixture would
+    // pass under both rules and could not catch the load/write mismatch.
     withTempHome(() => {
       const base = {
         port: 10100,

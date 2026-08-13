@@ -1644,8 +1644,10 @@ function warnDegradedRoutedToolDiscoveryForLoad(parsed: unknown): void {
       continue;
     }
     for (const [modelId, value] of Object.entries(map as Record<string, unknown>)) {
-      // A blank key fails the schema's `z.string().min(1)` and takes the WHOLE map with it,
-      // so it needs its own warning: reporting only bad values would drop the map silently.
+      // A blank key fails the schema's trimmed-nonblank refinement and takes the WHOLE map
+      // with it, so it needs its own warning: reporting only bad values would drop the map
+      // silently. `.min(1)` would NOT be enough here — it accepts a whitespace-only key,
+      // which is exactly the mismatch that once made this warning lie.
       if (modelId.trim() === "") {
         console.warn(`⚠️  config.json providers.${safeProviderName}.modelRoutedToolDiscovery has a blank model key — ignoring the whole map`);
         break;

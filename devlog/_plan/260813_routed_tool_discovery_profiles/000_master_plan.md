@@ -50,7 +50,9 @@ At the verified `dev` head:
 
 ### PR A — profile resolver and explicit escape hatch
 
-Default behavior remains byte-for-byte equivalent to #1596:
+Default behavior is intended to be equivalent to #1596, and is asserted per-key on both
+construction paths rather than by a normalized diff against a real prior build (that
+comparison is still open — see `029`):
 
 - non-Cursor: deferred
 - Cursor: direct
