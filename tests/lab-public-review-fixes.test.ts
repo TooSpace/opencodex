@@ -13,7 +13,7 @@ import { ensureLabDirs, labPublicOriginDir } from "../src/lab/paths";
 import { purgeSensitiveEvidence } from "../src/lab/ledger/purge";
 import { replayLabLedger } from "../src/lab/ledger/store";
 import * as publicApi from "../src/lab/public";
-import { setPublicEvidencePurgeFaultForTests } from "../src/lab/public/purge";
+import { setPublicEvidencePurgeFaultForTests } from "../src/lab/public/purge-test-fault";
 import {
   importCommunityEvidenceBundle,
   purgeLocalPublicEvidenceCopies,
