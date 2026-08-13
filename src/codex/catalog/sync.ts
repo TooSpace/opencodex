@@ -288,6 +288,7 @@ export function deriveEntry(
       normalizeRoutedCatalogEntry(e, model?.parallelToolCalls === true, {
         toolDiscoveryMode: model?.toolDiscoveryMode,
         providerId: model?.provider,
+        cursorRoute: model?.cursorRoute,
       });
       if (model) applyCatalogMetadata(e, model.provider, model.id, model.contextCap);
       applyCatalogModelMetadata(e, model);
@@ -318,9 +319,12 @@ export function deriveEntry(
   // web-search metadata (runTurn transport bypasses the sidecar). Non-Cursor routed fallbacks
   // advertise deferred discovery — code mode keeps deferred MCP callable (devlog
   // 260813_tool_catalog_deferral/010+020); search=false costs a measured 2.7x turn-1 payload.
-  // Same fence helper as the template path, so a `cursor/`-aliased combo whose canonical
-  // provider is `combo` cannot be classified one way here and another way there.
-  const isCursorFallback = isRouted && isCursorRoute(slug, model?.provider);
+  // Same fence helper as the template path, so a row cannot be classified one way here and
+  // another way there. The union includes the slug, which this path previously ignored.
+  const isCursorFallback = isRouted && isCursorRoute(slug, {
+    providerId: model?.provider,
+    cursorRoute: model?.cursorRoute,
+  });
   // Cursor is hard-fenced to direct; every other routed fallback follows its resolved mode,
   // defaulting to deferred so an unconfigured tree stays byte-identical to #1596.
   const fallbackDiscoveryMode = isCursorFallback

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { applyProviderConfigHints, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
+import { applyProviderConfigHints, buildCatalogEntries, normalizeRoutedCatalogEntry } from "../src/codex/catalog";
 import { deriveComboCatalogModel } from "../src/codex/catalog/aggregation";
 import type { CatalogModel } from "../src/codex/catalog/parsing";
 import {
@@ -119,25 +119,85 @@ describe("routed tool-discovery catalog emission", () => {
   });
 
   it("classifies a cursor/-aliased combo by provider identity, not by its public slug", () => {
-    // The unresolved #1596 P2: the template path used to fence on the slug while the
-    // template-less path fenced on provider identity, so this row's discovery mode depended
-    // on whether a template happened to exist. Both paths now share isCursorRoute().
-    expect(isCursorRoute("cursor/gpt-5.5", "combo")).toBe(false);
-    expect(isCursorRoute("cursor/gpt-5.5", "cursor")).toBe(true);
+    // The unresolved #1596 P2: the template path fenced on the slug while the template-less
+    // path fenced on provider identity, so this row's discovery mode depended on whether a
+    // template happened to exist. Both paths now share isCursorRoute(), which UNIONS the
+    // signals — reconciling them must never unfence a row that one path used to fence, since
+    // an under-fenced Cursor row advertises a surface its transport cannot serve.
+    expect(isCursorRoute("cursor/gpt-5.5", { providerId: "combo" })).toBe(true);
+    expect(isCursorRoute("cursor/gpt-5.5", { providerId: "cursor" })).toBe(true);
+    expect(isCursorRoute("combo/mix", { cursorRoute: true })).toBe(true);
     // No CatalogModel available: the slug prefix remains the only signal.
     expect(isCursorRoute("cursor/gpt-5.5")).toBe(true);
     expect(isCursorRoute("deepseek/glm-5.2")).toBe(false);
+    expect(isCursorRoute("deepseek/glm-5.2", { providerId: "deepseek" })).toBe(false);
 
+    // Byte-identical to the pre-change template path for this row.
     const entry = normalizeRoutedCatalogEntry({ slug: "cursor/gpt-5.5" } as never, false, {
       toolDiscoveryMode: "deferred",
       providerId: "combo",
     }) as Record<string, unknown>;
-    expect(entry.supports_search_tool).toBe(true);
-    expect(entry.web_search_tool_type).toBe("text_and_image");
+    expect(entry.supports_search_tool).toBe(false);
+    expect(entry.web_search_tool_type).toBeUndefined();
+  });
+
+  it("fences a Cursor-adapter gateway published under a custom provider name", () => {
+    // Only the resolver sees the adapter, so it stamps CatalogModel.cursorRoute and
+    // serialization honors it. Without that hop the row would keep hosted-search metadata
+    // while the resolver had already hard-fenced it to direct.
+    const resolved = resolveConfiguredRoutedToolDiscoveryMode("my-gw", provider({ adapter: "cursor" }), "gpt-5.5");
+    expect(resolved.mode).toBe("direct");
+
+    const entry = normalizeRoutedCatalogEntry({ slug: "my-gw/gpt-5.5" } as never, false, {
+      toolDiscoveryMode: resolved.mode,
+      providerId: "my-gw",
+      cursorRoute: true,
+    }) as Record<string, unknown>;
+    expect(entry.supports_search_tool).toBe(false);
+    expect(entry.web_search_tool_type).toBeUndefined();
+    expect(entry.supports_parallel_tool_calls).toBe(true);
+  });
+
+  it("stamps cursorRoute on the CatalogModel for a Cursor-adapter gateway", () => {
+    const hinted = applyProviderConfigHints("my-gw", provider({ adapter: "cursor" }), model("gpt-5.5", "my-gw"));
+    expect(hinted.cursorRoute).toBe(true);
+    expect(hinted.toolDiscoveryMode).toBe("direct");
+    // A plain provider must not gain the marker.
+    expect(applyProviderConfigHints("deepseek", provider(), model("glm-5.2", "deepseek")).cursorRoute).toBeUndefined();
   });
 });
 
 describe("routed tool-discovery propagation", () => {
+  // These drive the REAL construction paths in sync.ts rather than calling normalization
+  // directly, so the template-less fallback branch and its ensureStrictCatalogFields
+  // interaction are actually covered.
+  it("carries a direct override through the template-less fallback path", () => {
+    const entries = buildCatalogEntries(null, [], [
+      { provider: "deepseek", id: "glm-5.2", toolDiscoveryMode: "direct" },
+    ]);
+    const routed = entries.find(entry => entry.slug === "deepseek/glm-5.2");
+    expect(routed?.supports_search_tool).toBe(false);
+    // Hosted search is a separate capability and survives direct mode.
+    expect(routed?.web_search_tool_type).toBe("text_and_image");
+    expect(routed?.tool_mode).toBe("code_mode_only");
+  });
+
+  it("keeps the fallback path on deferred with no configuration", () => {
+    const entries = buildCatalogEntries(null, [], [{ provider: "deepseek", id: "glm-5.2" }]);
+    const routed = entries.find(entry => entry.slug === "deepseek/glm-5.2");
+    expect(routed?.supports_search_tool).toBe(true);
+    expect(routed?.web_search_tool_type).toBe("text_and_image");
+  });
+
+  it("fences a Cursor-adapter gateway on the fallback path via cursorRoute", () => {
+    const entries = buildCatalogEntries(null, [], [
+      { provider: "my-gw", id: "gpt-5.5", toolDiscoveryMode: "direct", cursorRoute: true },
+    ]);
+    const routed = entries.find(entry => entry.slug === "my-gw/gpt-5.5");
+    expect(routed?.supports_search_tool).toBe(false);
+    expect(routed?.web_search_tool_type).toBeUndefined();
+  });
+
   it("carries the resolved mode onto the CatalogModel", () => {
     const hinted = applyProviderConfigHints("deepseek", provider({ routedToolDiscovery: "direct" }), model("glm-5.2", "deepseek"));
     expect(hinted.toolDiscoveryMode).toBe("direct");
@@ -228,6 +288,52 @@ describe("routed tool-discovery config admission", () => {
     expect(result.ok).toBe(false);
     // The descriptor check must precede the read, so the getter never runs.
     expect(getterCalls).toBe(0);
+  });
+
+  it("rejects an accessor-backed provider-level mode without invoking the getter", () => {
+    // An accessor must not be mistaken for an absent field: treating it as absent lets the
+    // validator pass and Zod invokes the getter moments later, which is the whole bypass.
+    let getterCalls = 0;
+    const provider: Record<string, unknown> = { adapter: "openai-responses", baseUrl: "https://example.invalid" };
+    Object.defineProperty(provider, "routedToolDiscovery", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        return "direct";
+      },
+    });
+    const result = validateConfigCandidate({ defaultProvider: "deepseek", providers: { deepseek: provider } });
+    expect(result.ok).toBe(false);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects an accessor-backed provider entry and an accessor providers map", () => {
+    let entryCalls = 0;
+    const providers: Record<string, unknown> = {};
+    Object.defineProperty(providers, "deepseek", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        entryCalls += 1;
+        return { adapter: "openai-responses", baseUrl: "https://example.invalid", routedToolDiscovery: "direct" };
+      },
+    });
+    expect(validateConfigCandidate({ defaultProvider: "deepseek", providers }).ok).toBe(false);
+    expect(entryCalls).toBe(0);
+
+    let mapCalls = 0;
+    const root: Record<string, unknown> = { defaultProvider: "deepseek" };
+    Object.defineProperty(root, "providers", {
+      enumerable: true,
+      configurable: true,
+      get() {
+        mapCalls += 1;
+        return { deepseek: { adapter: "openai-responses", baseUrl: "https://example.invalid" } };
+      },
+    });
+    expect(validateConfigCandidate(root).ok).toBe(false);
+    expect(mapCalls).toBe(0);
   });
 
   it("ignores a prototype-sourced value rather than trusting it", () => {

@@ -51,18 +51,39 @@ export const CURSOR_PROVIDER_ID = "cursor";
 const CURSOR_SLUG_PREFIX = `${CURSOR_PROVIDER_ID}/`;
 
 /**
+ * Cursor identity as the RESOLVER sees it: provider name or adapter. A gateway can be named
+ * anything while speaking Cursor's custom runTurn transport, and it is the transport — not
+ * the label — that has no deferred path.
+ */
+export function isCursorProviderIdentity(providerName: string | undefined, adapter: string | undefined): boolean {
+  return providerName === CURSOR_PROVIDER_ID || adapter === CURSOR_PROVIDER_ID;
+}
+
+export interface CursorRouteSignals {
+  /** Canonical provider id from the CatalogModel, when the caller has one. */
+  providerId?: string;
+  /** Fence resolved upstream where the provider name AND adapter were both known. */
+  cursorRoute?: boolean;
+}
+
+/**
  * The single Cursor fence, shared by the template and template-less catalog paths.
  *
- * Provider identity wins when a CatalogModel is available; the public slug prefix is only
- * a fallback for callers that have none. Before this helper the two paths disagreed —
- * `parsing.ts` tested `slug.startsWith("cursor/")` while `sync.ts` tested
- * `model?.provider === "cursor"` — so a `cursor/`-aliased combo whose canonical provider is
- * `combo` was classified differently depending on whether a template happened to exist,
- * making discovery mode and payload size depend on template availability (unresolved P2 on
- * PR #1596).
+ * This is a UNION of every available signal, deliberately, because the two construction
+ * paths historically disagreed: `parsing.ts` tested `slug.startsWith("cursor/")` while
+ * `sync.ts` tested `model?.provider === "cursor"`, so a `cursor/`-aliased combo whose
+ * canonical provider is `combo` was classified differently depending on whether a template
+ * happened to exist (unresolved P2 on PR #1596). Any single-signal reconciliation would
+ * silently UNFENCE rows that one path used to fence, and an under-fenced Cursor row
+ * advertises a deferred surface its transport cannot serve. Over-fencing only costs
+ * payload, so the union is the safe direction.
+ *
+ * `cursorRoute` carries the resolver's verdict (provider name or adapter), which is the only
+ * signal that catches a Cursor-adapter gateway under a custom provider name.
  */
-export function isCursorRoute(slug: unknown, providerId?: string): boolean {
-  if (providerId !== undefined) return providerId === CURSOR_PROVIDER_ID;
+export function isCursorRoute(slug: unknown, signals: CursorRouteSignals = {}): boolean {
+  if (signals.cursorRoute === true) return true;
+  if (signals.providerId === CURSOR_PROVIDER_ID) return true;
   return typeof slug === "string" && slug.startsWith(CURSOR_SLUG_PREFIX);
 }
 
@@ -92,7 +113,7 @@ export function resolveConfiguredRoutedToolDiscoveryMode(
 
   // Cursor's runTurn transport bypasses the web-search sidecar and has no proven deferred
   // path, so the fence outranks any configuration rather than silently accepting it.
-  if (providerName === CURSOR_PROVIDER_ID || provider.adapter === CURSOR_PROVIDER_ID) {
+  if (isCursorProviderIdentity(providerName, provider.adapter)) {
     return {
       mode: "direct",
       source: "cursor-hard-fence",

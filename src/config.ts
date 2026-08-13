@@ -2256,13 +2256,22 @@ const ROUTED_TOOL_DISCOVERY_EXPECTED = "must be auto, deferred, or direct";
  *
  * The write boundary must reject accessor- and prototype-polluted candidates BEFORE it
  * reads them: a validator that touches `candidate.providers[x].modelRoutedToolDiscovery`
- * and only then checks for getters has already run attacker-supplied code. Returns
- * `undefined` for inherited keys and for anything that is not a plain data property.
+ * and only then checks for getters has already run attacker-supplied code.
+ *
+ * `absent` and `accessor` are distinguished deliberately. Collapsing both to `undefined`
+ * makes a getter-backed field look like a missing field, so the validator waves it through
+ * and Zod invokes the getter moments later — the exact bypass this helper exists to stop.
  */
-function ownDataProperty(target: object, key: string): unknown {
+type OwnDataProperty =
+  | { readonly kind: "absent" }
+  | { readonly kind: "accessor" }
+  | { readonly kind: "data"; readonly value: unknown };
+
+function ownDataProperty(target: object, key: string): OwnDataProperty {
   const descriptor = Object.getOwnPropertyDescriptor(target, key);
-  if (!descriptor || !("value" in descriptor)) return undefined;
-  return descriptor.value;
+  if (!descriptor) return { kind: "absent" };
+  if (!("value" in descriptor)) return { kind: "accessor" };
+  return { kind: "data", value: descriptor.value };
 }
 
 /**
@@ -2276,24 +2285,38 @@ function ownDataProperty(target: object, key: string): unknown {
 function routedToolDiscoveryError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw) return null;
-  const providers = ownDataProperty(raw, "providers");
+  const providersProperty = ownDataProperty(raw, "providers");
+  if (providersProperty.kind === "accessor") {
+    return "schema_invalid: providers: must be a plain object";
+  }
+  const providers = providersProperty.kind === "data" ? providersProperty.value : undefined;
   if (!providers || typeof providers !== "object" || Array.isArray(providers)) return null;
 
   for (const name of Object.getOwnPropertyNames(providers)) {
-    const provider = ownDataProperty(providers, name);
+    const providerProperty = ownDataProperty(providers, name);
+    if (providerProperty.kind === "accessor") {
+      return `schema_invalid: providers.${name}: must be a plain object`;
+    }
+    const provider = providerProperty.kind === "data" ? providerProperty.value : undefined;
     if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
 
-    const mode = ownDataProperty(provider, "routedToolDiscovery");
-    if (mode !== undefined && !isRoutedToolDiscoveryMode(mode)) {
+    const modeProperty = ownDataProperty(provider, "routedToolDiscovery");
+    if (modeProperty.kind === "accessor") {
+      return `schema_invalid: providers.${name}.routedToolDiscovery: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
+    }
+    if (modeProperty.kind === "data"
+      && modeProperty.value !== undefined
+      && !isRoutedToolDiscoveryMode(modeProperty.value)) {
       return `schema_invalid: providers.${name}.routedToolDiscovery: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
     }
 
-    if (!Object.hasOwn(provider, "modelRoutedToolDiscovery")) continue;
-    const map = ownDataProperty(provider, "modelRoutedToolDiscovery");
-    if (map === undefined) {
-      // Present but not a plain data property: an accessor or prototype-sourced value.
+    const mapProperty = ownDataProperty(provider, "modelRoutedToolDiscovery");
+    if (mapProperty.kind === "accessor") {
       return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: must be a plain object of model overrides`;
     }
+    if (mapProperty.kind === "absent") continue;
+    const map = mapProperty.value;
+    if (map === undefined) continue;
     if (typeof map !== "object" || map === null || Array.isArray(map)) {
       return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: must be a plain object of model overrides`;
     }
@@ -2301,8 +2324,8 @@ function routedToolDiscoveryError(value: unknown): string | null {
       if (modelId.trim() === "") {
         return `schema_invalid: providers.${name}.modelRoutedToolDiscovery: model keys must be nonblank`;
       }
-      const modelMode = ownDataProperty(map, modelId);
-      if (!isRoutedToolDiscoveryMode(modelMode)) {
+      const modelModeProperty = ownDataProperty(map, modelId);
+      if (modelModeProperty.kind !== "data" || !isRoutedToolDiscoveryMode(modelModeProperty.value)) {
         return `schema_invalid: providers.${name}.modelRoutedToolDiscovery.${modelId}: ${ROUTED_TOOL_DISCOVERY_EXPECTED}`;
       }
     }

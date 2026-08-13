@@ -124,6 +124,12 @@ export interface CatalogModel {
    * back into global config, matching how parallelToolCalls and the modality hints flow.
    */
   toolDiscoveryMode?: ResolvedRoutedToolDiscoveryMode;
+  /**
+   * Cursor fence resolved where the provider name AND adapter were both known
+   * (applyProviderConfigHints). Serialization cannot re-derive this: it sees only the
+   * provider id, so a Cursor-adapter gateway under a custom provider name would escape.
+   */
+  cursorRoute?: boolean;
   /** Whether Codex may send Responses text.verbosity for this routed model. */
   supportsVerbosity?: boolean;
   supportsReasoningSummaries?: boolean;
@@ -396,6 +402,8 @@ export interface RoutedCatalogEntryOptions {
   toolDiscoveryMode?: ResolvedRoutedToolDiscoveryMode;
   /** Canonical provider id from the CatalogModel, when the caller has one. */
   providerId?: string;
+  /** Fence resolved upstream from provider name + adapter (CatalogModel.cursorRoute). */
+  cursorRoute?: boolean;
 }
 
 export function normalizeRoutedCatalogEntry(
@@ -416,9 +424,12 @@ export function normalizeRoutedCatalogEntry(
   // Routed rows cloned from native templates must not inherit OpenAI-only summary delivery.
   // Per-model routed opt-ins can be added once provider metadata exposes this capability.
   delete entry.supports_reasoning_summaries;
-  // Provider identity first, slug prefix only as a fallback — one shared fence for both the
-  // template and template-less paths (see tool-discovery.ts isCursorRoute).
-  const isCursorEntry = isCursorRoute(entry.slug, options.providerId);
+  // One shared fence for both construction paths, unioning every available signal so that
+  // reconciling the two historical checks can never UNFENCE a row (see isCursorRoute).
+  const isCursorEntry = isCursorRoute(entry.slug, {
+    providerId: options.providerId,
+    cursorRoute: options.cursorRoute,
+  });
   // `supports_search_tool` selects Codex's deferred tool-discovery surface; it is not the hosted
   // web-search capability. Routed rows also carry tool_mode=code_mode_only (below), and under code
   // mode DEFERRED MCP tools remain callable through exec's `tools` global / ALL_TOOLS without any

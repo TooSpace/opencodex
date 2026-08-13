@@ -69,7 +69,7 @@ import { createAdmissionGate, ResourceAdmissionError, type AdmissionMetrics } fr
 
 import { CODEX_CUSTOM_MODEL_CATALOG_KIND, JAWCODE_CATALOG_AUGMENT_PROVIDERS, catalogModelSlug, shouldExposeRoutedModel } from "./parsing";
 import type { CatalogModel } from "./parsing";
-import { resolveConfiguredRoutedToolDiscoveryMode } from "./tool-discovery";
+import { isCursorProviderIdentity, resolveConfiguredRoutedToolDiscoveryMode } from "./tool-discovery";
 import { disabledNativeSlugs, hasComboTargets, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiContextWindow, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
@@ -654,6 +654,9 @@ export function applyProviderConfigHints(name: string, prov: OcxProviderConfig, 
     // Resolve routed discovery here so configured, live-discovered, cached and combo-derived
     // rows all carry the same value and `auto` never reaches serialization.
     toolDiscoveryMode: resolveConfiguredRoutedToolDiscoveryMode(name, prov, model.id).mode,
+    // Resolve the fence here too: this is the only place that sees BOTH the provider name and
+    // its adapter, so a Cursor-adapter gateway under a custom name cannot escape at emit time.
+    ...(isCursorProviderIdentity(name, prov.adapter) ? { cursorRoute: true } : {}),
   };
   const capped = applyProviderContextCap(hinted.contextWindow, providerCap);
   if (providerCap !== undefined && capped !== hinted.contextWindow) {
@@ -1729,6 +1732,15 @@ async function gatherRoutedModelsUncached(
       ...(cm.contextWindow ? { contextWindow: cm.contextWindow } : {}),
       ...(cm.inputModalities ? { inputModalities: cm.inputModalities } : {}),
       ...(typeof supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries } : {}),
+      // Custom rows never pass through applyProviderConfigHints, so resolve the routed
+      // discovery policy here too — otherwise a provider-level `direct` silently degrades to
+      // deferred for exactly the models an operator hand-declared.
+      ...(rawProvider
+        ? {
+          toolDiscoveryMode: resolveConfiguredRoutedToolDiscoveryMode(cm.provider, rawProvider, cm.modelId).mode,
+          ...(isCursorProviderIdentity(cm.provider, rawProvider.adapter) ? { cursorRoute: true } : {}),
+        }
+        : {}),
     };
     // #962: the dedupe below drops the provider-derived row this custom row replaces. Inherit that
     // row's provider capability metadata (reasoning ladder, default effort, parallel tool calls,
@@ -1748,6 +1760,8 @@ async function gatherRoutedModelsUncached(
       ...(base.supportsVerbosity === undefined && replaced.supportsVerbosity !== undefined ? { supportsVerbosity: replaced.supportsVerbosity } : {}),
       ...(base.supportsReasoningSummaries === undefined && replaced.supportsReasoningSummaries !== undefined ? { supportsReasoningSummaries: replaced.supportsReasoningSummaries } : {}),
       ...(base.capabilities === undefined && replaced.capabilities !== undefined ? { capabilities: replaced.capabilities } : {}),
+      ...(base.toolDiscoveryMode === undefined && replaced.toolDiscoveryMode !== undefined ? { toolDiscoveryMode: replaced.toolDiscoveryMode } : {}),
+      ...(base.cursorRoute === undefined && replaced.cursorRoute !== undefined ? { cursorRoute: replaced.cursorRoute } : {}),
     } : base;
     // Vision-sidecar coverage ONLY: if the custom model is in the enriched provider's
     // noVisionModels, advertise image input so the Codex app lets images reach the sidecar
@@ -1827,6 +1841,9 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
       ...(maxInputTokens ? { maxInputTokens } : {}),
       ...(policy.modelInputModalities?.[id] ? { inputModalities: [...policy.modelInputModalities[id]!] } : {}),
       ...(policy.modelReasoningEfforts?.[id] ? { reasoningEfforts: [...policy.modelReasoningEfforts[id]!] } : {}),
+      // Rebuilt from the trusted snapshot rather than through applyProviderConfigHints, so the
+      // routed discovery policy has to be resolved here as well.
+      toolDiscoveryMode: resolveConfiguredRoutedToolDiscoveryMode(OPENAI_API_PROVIDER_ID, configured, id).mode,
     };
   });
 
