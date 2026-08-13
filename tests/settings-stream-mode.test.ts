@@ -29,12 +29,13 @@ import {
   usageSummaryRetainedStoreSnapshot,
 } from "../src/server/management/usage-summary-cache";
 import { catalogConvergenceFactory } from "./helpers/catalog-convergence";
+import { startupHealthFixture } from "./helpers/startup-health";
 
 let TEST_DIR = "";
 const previousHome = process.env.OPENCODEX_HOME;
-const readTestStartupHealth: NonNullable<ManagementApiDeps["getCachedStartupHealth"]> = async () => ({
-  status: "native",
-} as never);
+const readTestStartupHealth: NonNullable<ManagementApiDeps["getCachedStartupHealth"]> = async () => (
+  startupHealthFixture()
+);
 
 function baseConfig(): OcxConfig {
   return {
