@@ -7,9 +7,14 @@ import {
   labExportDir,
   labPublicPublisherKeyPath,
 } from "../paths";
+import {
+  isCommunityRevocationFileName,
+  parseCommunityBundleFileName,
+} from "./community-files";
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
 import { publicEvidenceId } from "./ids";
-import { clearLocalPublicOrigins, listLocalPublicOrigins } from "./origin";
+import { clearLocalPublicOrigins } from "./origin";
+import { listValidPublicOriginsForPurge } from "./origin-purge";
 import { publicEvidencePurgeFaultForTests } from "./purge-test-fault";
 import { readPublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
@@ -17,8 +22,6 @@ import { parseStrictPublicJson } from "./strict-json";
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
 const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
-const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
-const COMMUNITY_REVOCATION_RE = /^revocation-([0-9a-f]{64})\.json$/;
 
 /**
  * Publisher provenance is useful only for classifying local community copies. A corrupt
@@ -128,15 +131,9 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
 
   const exportedIdentities = localExportIdentities(configDir);
   const localPublisherKeyIds = new Set<string>();
-  try {
-    for (const origin of listLocalPublicOrigins(configDir)) {
-      exportedIdentities.add(publicIdentity(origin.publisherKeyId, origin.bundleId));
-      localPublisherKeyIds.add(origin.publisherKeyId);
-    }
-  } catch {
-    // Provenance corruption must never retain the mandatory sensitive export bytes.
-    // Legacy export identity and the current publisher key still provide best-effort
-    // classification for public community cleanup below.
+  for (const origin of listValidPublicOriginsForPurge(configDir)) {
+    exportedIdentities.add(publicIdentity(origin.publisherKeyId, origin.bundleId));
+    localPublisherKeyIds.add(origin.publisherKeyId);
   }
   const currentPublisherKeyId = readExistingPublisherKeyId(configDir);
   if (currentPublisherKeyId) localPublisherKeyIds.add(currentPublisherKeyId);
@@ -149,10 +146,9 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
   let deletedCommunityBundles = 0;
   let deletedCommunityRevocations = 0;
   for (const entry of readdirSync(communityDir, { withFileTypes: true })) {
-    const bundleMatch = COMMUNITY_BUNDLE_RE.exec(entry.name);
-    if (bundleMatch) {
-      const publisherKeyId = bundleMatch[1]!;
-      const bundleId = bundleMatch[2]!;
+    const bundleIdentity = parseCommunityBundleFileName(entry.name);
+    if (bundleIdentity) {
+      const { publisherKeyId, bundleId } = bundleIdentity;
       const locallyOriginated = exportedIdentities.has(publicIdentity(publisherKeyId, bundleId))
         || localPublisherKeyIds.has(publisherKeyId);
       if (locallyOriginated && unlinkLocalCommunityFile(join(communityDir, entry.name))) {
@@ -161,7 +157,7 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
       continue;
     }
 
-    if (COMMUNITY_REVOCATION_RE.test(entry.name)) {
+    if (isCommunityRevocationFileName(entry.name)) {
       const path = join(communityDir, entry.name);
       const publisherKeyId = communityObjectPublisherKeyId(path);
       if (publisherKeyId && localPublisherKeyIds.has(publisherKeyId)
