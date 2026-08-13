@@ -10,7 +10,7 @@ import { isSha256Hex, jcsStringify } from "../digest";
 import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
-import { publishPrivateFileExclusive } from "./private-file";
+import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { parseStrictPublicJson } from "./strict-json";
 import type { PublicEvidenceBundleV1 } from "./types";
@@ -38,6 +38,7 @@ function assertLocalArtifactExportAuthority(bundle: PublicEvidenceBundleV1): voi
 }
 
 function readPrivateRegularFile(path: string): Buffer {
+  cleanupStalePrivateFileStages(path);
   const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
   try {
     const stats = fstatSync(fd);
