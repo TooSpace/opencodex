@@ -153,11 +153,11 @@
 - Modify: `src/lab/public/purge.ts`
 
 **Interfaces:**
-- Produces: bounded immutable `public-origin-v1` markers containing only public publisherKeyId/bundleId identities. The origin marker is durably committed before a new local export file is published, so export success can never be reported without purge-owned provenance; an orphan marker after a later export failure is conservative and safe.
+- Produces: bounded immutable `public-origin-v1` markers containing only public publisherKeyId/bundleId identities. The origin marker is durably committed before a new local export file is published, so export success can never be reported without purge-owned provenance; an orphan marker after a later export failure is conservative and safe. Under retention pressure, markers without an exact community bundle copy may be reclaimed because no community object remains for that provenance marker to classify; markers backing retained community bundles are preserved.
 
 - [ ] **Step 1:** Commit the public origin identity before publishing the local export file; if export publication later fails, preserve the orphan marker so retry/purge can recover conservatively.
 - [ ] **Step 2:** Make purge union origin markers with legacy recoverable export/key provenance.
-- [ ] **Step 3:** Delete origin markers only after locally-originated community copies are removed.
+- [ ] **Step 3:** Delete origin markers only after locally-originated community copies are removed, except bounded retention reclamation of markers with no exact community bundle copy.
 - [ ] **Step 4:** Verify purge still succeeds if the export and publisher key are corrupted/missing.
 
 ### Task 11: Harden diagnostics and privacy scanner
