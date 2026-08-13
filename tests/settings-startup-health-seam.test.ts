@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { handleManagementAPI, type ManagementApiDeps } from "../src/server/management-api";
 import type { OcxConfig } from "../src/types";
 import { ManagementRequest as Request } from "./helpers/management-auth";
+import { startupHealthFixture } from "./helpers/startup-health";
 
 function baseConfig(): OcxConfig {
   return {
@@ -21,11 +22,12 @@ function baseConfig(): OcxConfig {
 test("settings PUT uses the injected startup-health reader", async () => {
   const config = baseConfig();
   let reads = 0;
+  const expectedHealth = startupHealthFixture({ diagnosticStale: true });
   const deps: ManagementApiDeps = {
     saveConfigPreservingClaudeCode: () => {},
     getCachedStartupHealth: async () => {
       reads += 1;
-      return { marker: "deterministic-test-health" } as never;
+      return expectedHealth;
     },
   };
   const req = new Request("http://127.0.0.1:10100/api/settings", {
@@ -39,6 +41,6 @@ test("settings PUT uses the injected startup-health reader", async () => {
   expect(response?.status).toBe(200);
   expect(reads).toBe(1);
   expect(await response!.json()).toMatchObject({
-    startupHealth: { marker: "deterministic-test-health" },
+    startupHealth: { diagnosticStale: true, status: "native" },
   });
 });
