@@ -1,6 +1,9 @@
 import { PublicEvidenceValidationError } from "./validate";
 
 const MAX_PUBLIC_JSON_DEPTH = 8;
+const MAX_PUBLIC_JSON_OBJECT_KEYS = 64;
+const MAX_PUBLIC_JSON_ARRAY_ELEMENTS = 512;
+const MAX_PUBLIC_JSON_STRING_BYTES = 384 * 1024;
 
 function isJsonWhitespace(value: string | undefined): boolean {
   return value === " " || value === "\n" || value === "\r" || value === "\t";
@@ -10,7 +13,7 @@ function malformedJson(code: string, message: string): never {
   throw new PublicEvidenceValidationError(code, message);
 }
 
-function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): void {
+function assertStrictPublicJsonShape(text: string, invalidCode: string): void {
   let index = 0;
   let depth = 0;
 
@@ -38,6 +41,9 @@ function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): voi
         continue;
       }
       if (ch === '"') {
+        if (Buffer.byteLength(text.slice(start + 1, index - 1), "utf8") > MAX_PUBLIC_JSON_STRING_BYTES) {
+          invalid(`public JSON string exceeds ${MAX_PUBLIC_JSON_STRING_BYTES} bytes`);
+        }
         try {
           const decoded = JSON.parse(text.slice(start, index));
           if (typeof decoded !== "string") invalid("public JSON contains an invalid string token");
@@ -85,7 +91,12 @@ function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): voi
         index += 1;
         return;
       }
+      let elementCount = 0;
       while (index < text.length) {
+        elementCount += 1;
+        if (elementCount > MAX_PUBLIC_JSON_ARRAY_ELEMENTS) {
+          invalid(`public JSON array exceeds ${MAX_PUBLIC_JSON_ARRAY_ELEMENTS} elements`);
+        }
         parseValue();
         skipWhitespace();
         if (text[index] === "]") {
@@ -120,6 +131,9 @@ function assertNoDuplicateJsonObjectKeys(text: string, invalidCode: string): voi
           throw new PublicEvidenceValidationError("duplicate_json_key", "duplicate JSON object key");
         }
         keys.add(key);
+        if (keys.size > MAX_PUBLIC_JSON_OBJECT_KEYS) {
+          invalid(`public JSON object exceeds ${MAX_PUBLIC_JSON_OBJECT_KEYS} keys`);
+        }
         skipWhitespace();
         if (text[index] !== ":") invalid("public JSON object is missing a colon");
         index += 1;
@@ -175,7 +189,7 @@ export function parseStrictPublicJson(
   if (!Buffer.from(text, "utf8").equals(buffer)) {
     throw new PublicEvidenceValidationError(invalidCode, `${label} is not valid UTF-8 JSON`);
   }
-  assertNoDuplicateJsonObjectKeys(text, invalidCode);
+  assertStrictPublicJsonShape(text, invalidCode);
   try {
     return JSON.parse(text);
   } catch {
