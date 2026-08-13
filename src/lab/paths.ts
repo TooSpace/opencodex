@@ -91,9 +91,14 @@ export function labCommunityDir(configDir = getConfigDir()): string {
 }
 
 export const LAB_PUBLIC_PUBLISHER_KEY_FILE = "publisher-ed25519.pem";
+export const LAB_PUBLIC_ORIGIN_INDEX_FILE = "public-origin-v1.json";
 
 export function labPublicPublisherKeyPath(configDir = getConfigDir()): string {
   return join(labRoot(configDir), LAB_PUBLIC_PUBLISHER_KEY_FILE);
+}
+
+export function labPublicOriginIndexPath(configDir = getConfigDir()): string {
+  return join(labRoot(configDir), LAB_PUBLIC_ORIGIN_INDEX_FILE);
 }
 
 /** Opaque per-installation salt for local fingerprinting (never exported as evidence). */
