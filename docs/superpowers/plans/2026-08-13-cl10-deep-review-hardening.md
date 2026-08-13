@@ -85,11 +85,11 @@
 - Modify: `src/lab/public/community.ts`
 
 **Interfaces:**
-- Produces: temp-file + fsync + exclusive hard-link publication for immutable secret/public objects, deterministic EEXIST conflict handling, and test-only pre-publication fault seams.
+- Produces: temp-file + file fsync + exclusive hard-link publication for immutable secret/public objects, deterministic EEXIST conflict handling, POSIX parent-directory durability before success is reported, an explicit Windows fallback where directory fsync is not portable, and test-only publication fault seams.
 
-- [ ] **Step 1:** Implement a small shared helper that writes a mode-0600 private temp file, fsyncs it, publishes it by exclusive hard link, and always removes the temp file.
+- [ ] **Step 1:** Implement a small shared helper that writes a mode-0600 private temp file, fsyncs it, publishes it by exclusive hard link, fsyncs the parent directory on POSIX, and removes the temp name only after the publication durability boundary succeeds. On Windows, retain atomic exclusive publication without requiring unsupported directory fsync.
 - [ ] **Step 2:** Migrate publisher-key creation, local exports, and community bundle/revocation persistence to the helper.
-- [ ] **Step 3:** Verify an injected pre-publish failure leaves no final partial file and a retry succeeds.
+- [ ] **Step 3:** Verify an injected pre-publish failure leaves no final partial file, a POSIX parent-directory-sync failure is reported and can be recovered by an idempotent retry, and Windows publication does not depend on directory fsync.
 
 ### Task 6: Validate before publisher-state mutation
 
@@ -153,11 +153,11 @@
 - Modify: `src/lab/public/purge.ts`
 
 **Interfaces:**
-- Produces: bounded `public-origin-v1.json` containing only public publisherKeyId/bundleId identities, updated atomically after a successful local export and consumed before export deletion during purge.
+- Produces: bounded immutable `public-origin-v1` markers containing only public publisherKeyId/bundleId identities. The origin marker is durably committed before a new local export file is published, so export success can never be reported without purge-owned provenance; an orphan marker after a later export failure is conservative and safe.
 
-- [ ] **Step 1:** Record successful local export identity after storage succeeds.
-- [ ] **Step 2:** Make purge union the origin index with legacy recoverable export/key provenance.
-- [ ] **Step 3:** Delete the origin index only after locally-originated community copies are removed.
+- [ ] **Step 1:** Commit the public origin identity before publishing the local export file; if export publication later fails, preserve the orphan marker so retry/purge can recover conservatively.
+- [ ] **Step 2:** Make purge union origin markers with legacy recoverable export/key provenance.
+- [ ] **Step 3:** Delete origin markers only after locally-originated community copies are removed.
 - [ ] **Step 4:** Verify purge still succeeds if the export and publisher key are corrupted/missing.
 
 ### Task 11: Harden diagnostics and privacy scanner
