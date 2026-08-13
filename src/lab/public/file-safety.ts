@@ -26,15 +26,11 @@ function sizeError(options: PrivateRegularFileReadOptions): PublicEvidenceValida
   );
 }
 
-/**
- * Read bytes only after proving that the pathname and the consumed descriptor refer to
- * the same private regular file. The lstat/dev+ino comparison keeps the protection on
- * platforms where O_NOFOLLOW is unavailable instead of silently following a symlink.
- */
-export function readPrivateRegularFile(
+function withPrivateRegularFile<T>(
   path: string,
   options: PrivateRegularFileReadOptions,
-): Buffer {
+  consume: (fd: number, size: number) => T,
+): T {
   const pathStats = lstatSync(path);
   if (pathStats.isSymbolicLink() || !pathStats.isFile() || pathStats.nlink !== 1) {
     throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
@@ -56,10 +52,36 @@ export function readPrivateRegularFile(
     if (options.requireMode600 && process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
       throw new PublicEvidenceValidationError(options.errorCode, options.errorMessage);
     }
-    const bytes = readFileSync(fd);
-    if (bytes.byteLength > options.maxBytes) throw sizeError(options);
-    return bytes;
+    return consume(fd, stats.size);
   } finally {
     closeSync(fd);
   }
+}
+
+/**
+ * Inspect a file only after proving that the pathname and checked descriptor refer to
+ * the same private regular file. This keeps quota scans descriptor-bound without
+ * reading every cached object into memory.
+ */
+export function privateRegularFileSize(
+  path: string,
+  options: PrivateRegularFileReadOptions,
+): number {
+  return withPrivateRegularFile(path, options, (_fd, size) => size);
+}
+
+/**
+ * Read bytes only after proving that the pathname and the consumed descriptor refer to
+ * the same private regular file. The lstat/dev+ino comparison keeps the protection on
+ * platforms where O_NOFOLLOW is unavailable instead of silently following a symlink.
+ */
+export function readPrivateRegularFile(
+  path: string,
+  options: PrivateRegularFileReadOptions,
+): Buffer {
+  return withPrivateRegularFile(path, options, (fd) => {
+    const bytes = readFileSync(fd);
+    if (bytes.byteLength > options.maxBytes) throw sizeError(options);
+    return bytes;
+  });
 }
