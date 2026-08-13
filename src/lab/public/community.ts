@@ -4,6 +4,7 @@ import { jcsStringify } from "../digest";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { validateCommunityEvidenceAuthorities } from "./community-authority";
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
+import { recordLocalPublicOrigin } from "./origin";
 import {
   cleanupStalePrivateFileStages,
   cleanupStalePrivateFileStagesInDir,
@@ -12,7 +13,7 @@ import {
 } from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { verifyPublicEvidenceRevocation } from "./revocation";
-import { verifyPublicEvidenceBundle } from "./signature";
+import { loadExistingPublicPublisher, verifyPublicEvidenceBundle } from "./signature";
 import { parseStrictPublicJson } from "./strict-json";
 import type {
   CommunityEvidenceSummaryV1,
@@ -226,6 +227,17 @@ function bundlesFromNames(names: readonly string[], configDir?: string): PublicE
   return bundles;
 }
 
+function restoreOwnPublisherOrigin(bundle: PublicEvidenceBundleV1, configDir?: string): void {
+  const local = loadExistingPublicPublisher(configDir);
+  if (!local) return;
+  if (
+    local.publisher.algorithm !== bundle.publisher.algorithm
+    || local.publisher.keyId !== bundle.publisher.keyId
+    || local.publisher.publicKey !== bundle.publisher.publicKey
+  ) return;
+  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
+}
+
 export function importCommunityEvidenceBundle(
   raw: unknown,
   configDir?: string,
@@ -238,6 +250,14 @@ export function importCommunityEvidenceBundle(
     bundle,
     configDir,
   );
+  try {
+    restoreOwnPublisherOrigin(bundle, configDir);
+  } catch (error) {
+    if (stored.created) {
+      try { unlinkSync(stored.path); } catch { /* preserve provenance failure */ }
+    }
+    throw error;
+  }
   return { ...stored, status: "cryptographically_valid", bundleId: bundle.bundleId, publisherKeyId: bundle.publisher.keyId };
 }
 
