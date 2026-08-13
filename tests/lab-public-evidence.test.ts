@@ -299,7 +299,7 @@ describe("CL-10 public bundle and publisher", () => {
       artifacts: [],
       createdDayUtc: "2026-08-12",
       configDir: home,
-    })).toThrow(/forbidden URL material/i);
+    })).toThrow(/closed public identifier|forbidden URL material/i);
     expect(existsSync(labPublicPublisherKeyPath(home))).toBe(false);
   });
 
