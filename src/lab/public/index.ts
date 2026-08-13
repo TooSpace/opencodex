@@ -11,7 +11,6 @@ export * from "./community-authority";
 export * from "./revocation";
 export * from "./community";
 export * from "./strict-json";
-export * from "./private-file";
 export * from "./origin";
 export * from "./operator";
 export * from "./purge";
