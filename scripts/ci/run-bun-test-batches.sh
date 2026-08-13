@@ -5,6 +5,8 @@ readonly SHARD_SPEC="${1:-}"
 readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
+readonly DEFAULT_TEST_TIMEOUT_MS="${BUN_TEST_CASE_TIMEOUT_MS:-5000}"
+readonly CATALOG_SYNC_TEST_TIMEOUT_MS="${BUN_CATALOG_SYNC_TEST_TIMEOUT_MS:-15000}"
 
 usage() {
   echo "usage: $0 <shard/total>" >&2
@@ -31,6 +33,14 @@ if [[ ! "$BATCH_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   echo "BUN_TEST_BATCH_KILL_GRACE_SECONDS must be a positive integer, got: $BATCH_KILL_GRACE_SECONDS" >&2
+  exit 64
+fi
+if [[ ! "$DEFAULT_TEST_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_CASE_TIMEOUT_MS must be a positive integer, got: $DEFAULT_TEST_TIMEOUT_MS" >&2
+  exit 64
+fi
+if [[ ! "$CATALOG_SYNC_TEST_TIMEOUT_MS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_CATALOG_SYNC_TEST_TIMEOUT_MS must be a positive integer, got: $CATALOG_SYNC_TEST_TIMEOUT_MS" >&2
   exit 64
 fi
 if ! command -v timeout >/dev/null 2>&1; then
@@ -92,7 +102,15 @@ run_test_once() {
   local -a files=("$@")
   local log_file
   local status
+  local test_timeout_ms="$DEFAULT_TEST_TIMEOUT_MS"
   local label="shard ${SHARD_SPEC} batch ${batch_number}/${TOTAL_BATCHES}"
+
+  for file in "${files[@]}"; do
+    if [[ "$file" == "tests/codex-catalog-sync-hardening.test.ts" ]]; then
+      test_timeout_ms="$CATALOG_SYNC_TEST_TIMEOUT_MS"
+      break
+    fi
+  done
 
   if [[ -n "$phase" ]]; then
     label+=" ${phase}"
@@ -100,13 +118,13 @@ run_test_once() {
 
   log_file="$(mktemp -t ocx-bun-test-batch.XXXXXX)"
 
-  echo "::group::${label} attempt ${attempt} (${#files[@]} files)"
+  echo "::group::${label} attempt ${attempt} (${#files[@]} files, test timeout ${test_timeout_ms}ms)"
   printf '  %s\n' "${files[@]}"
 
   set +e
   timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
     "${BATCH_TIMEOUT_SECONDS}s" \
-    bun test --isolate "${files[@]}" 2>&1 | tee "$log_file"
+    bun test --isolate --timeout "$test_timeout_ms" "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 
