@@ -62,7 +62,9 @@ function fsyncParentForPublication(path: string): void {
   } catch (error) {
     if (error instanceof Error && error.message.includes("synthetic private-file")) throw error;
     const code = (error as NodeJS.ErrnoException).code ?? "unknown";
-    throw new Error(`private-file parent directory sync failed (${code})`, { cause: error });
+    const wrapped = new Error(`private-file parent directory sync failed (${code})`);
+    (wrapped as Error & { cause?: unknown }).cause = error;
+    throw wrapped;
   } finally {
     if (fd !== null) closeSync(fd);
   }
