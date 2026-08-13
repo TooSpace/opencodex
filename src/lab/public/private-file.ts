@@ -32,27 +32,6 @@ function staleTempPrefix(finalPath: string): string {
   return `.${basename(finalPath)}.`;
 }
 
-function cleanupStaleTemps(finalPath: string): void {
-  const dir = dirname(finalPath);
-  const prefix = staleTempPrefix(finalPath);
-  let changed = false;
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
-    const rest = name.slice(prefix.length, -4);
-    const pidText = rest.slice(0, rest.indexOf("."));
-    if (!/^\d+$/.test(pidText)) continue;
-    const pid = Number(pidText);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
-    try {
-      unlinkSync(join(dir, name));
-      changed = true;
-    } catch {
-      // Another cleanup or writer may have removed it after enumeration.
-    }
-  }
-  if (changed) fsyncParentBestEffort(finalPath);
-}
-
 function fsyncParentBestEffort(path: string): void {
   let fd: number | null = null;
   try {
@@ -64,6 +43,37 @@ function fsyncParentBestEffort(path: string): void {
   } finally {
     if (fd !== null) closeSync(fd);
   }
+}
+
+/** Reclaim target-scoped staging links from writers that are definitely no longer alive. */
+export function cleanupStalePrivateFileStages(finalPath: string): void {
+  const dir = dirname(finalPath);
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  const prefix = staleTempPrefix(finalPath);
+  let changed = false;
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
+    const rest = name.slice(prefix.length, -4);
+    const separator = rest.indexOf(".");
+    if (separator < 1) continue;
+    const pidText = rest.slice(0, separator);
+    if (!/^\d+$/.test(pidText)) continue;
+    const pid = Number(pidText);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
+    try {
+      unlinkSync(join(dir, name));
+      changed = true;
+    } catch {
+      // Another cleanup or writer may have removed it after enumeration.
+    }
+  }
+  if (changed) fsyncParentBestEffort(finalPath);
 }
 
 function writeAll(fd: number, bytes: Uint8Array): void {
@@ -79,13 +89,13 @@ function writeAll(fd: number, bytes: Uint8Array): void {
  * Publish immutable mode-0600 bytes without ever exposing a partially-written final path.
  * The caller owns EEXIST comparison semantics because some objects are idempotent and
  * others are identity conflicts. Staging files are target-scoped and stale stages from
- * definitely-dead writers are reclaimed on the next publication attempt.
+ * definitely-dead writers are reclaimed on the next read or publication attempt.
  */
 export function publishPrivateFileExclusive(
   finalPath: string,
   bytes: Uint8Array,
 ): { created: boolean } {
-  cleanupStaleTemps(finalPath);
+  cleanupStalePrivateFileStages(finalPath);
   const tempPath = join(
     dirname(finalPath),
     `${staleTempPrefix(finalPath)}${process.pid}.${randomUUID()}.tmp`,
@@ -118,6 +128,7 @@ export function publishPrivateFileExclusive(
 }
 
 export function readPublishedPrivateFile(path: string): Buffer {
+  cleanupStalePrivateFileStages(path);
   return readFileSync(path);
 }
 
