@@ -1,7 +1,7 @@
-import { readdirSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
-import { ensureLabDirs, labPublicOriginDir } from "../paths";
+import { ensureLabDirs, labCommunityDir, labPublicOriginDir } from "../paths";
 import { readPrivateRegularFile } from "./file-safety";
 import {
   cleanupStalePrivateFileStagesInDir,
@@ -11,7 +11,10 @@ import {
 import { parseStrictPublicJson } from "./strict-json";
 import { PublicEvidenceValidationError } from "./validate";
 
-const MAX_ORIGINS = 512;
+// The community cache itself is capped at 512 files. Keeping twice that many origin
+// markers leaves headroom for in-flight/local exports while allowing unreferenced
+// provenance to be reclaimed instead of permanently locking future exports.
+const MAX_ORIGINS = 1024;
 const MAX_ORIGIN_BYTES = 1024;
 const ORIGIN_RE = /^origin-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 
@@ -72,21 +75,70 @@ function originNames(dir: string): string[] {
   return readdirSync(dir).filter((name) => !isPrivateFileStageName(name)).sort();
 }
 
+function pathExistsConservatively(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    return true;
+  }
+}
+
+function communityBundlePath(identity: PublicOriginIdentityV1, configDir?: string): string {
+  return join(
+    labCommunityDir(configDir),
+    `bundle-${identity.publisherKeyId}-${identity.bundleId}.json`,
+  );
+}
+
+/**
+ * Origin markers exist to recover local provenance for community copies when the export
+ * or publisher key is later unavailable. If no exact community copy exists, the marker
+ * is reclaimable under pressure because there is no public community object for purge to
+ * classify. Unexpected entries are never deleted here.
+ */
+function reclaimUnreferencedOrigins(
+  dir: string,
+  preservePath: string,
+  configDir?: string,
+): void {
+  for (const name of originNames(dir)) {
+    const match = ORIGIN_RE.exec(name);
+    if (!match) continue;
+    const path = join(dir, name);
+    if (path === preservePath) continue;
+    const identity = { publisherKeyId: match[1]!, bundleId: match[2]! };
+    if (pathExistsConservatively(communityBundlePath(identity, configDir))) continue;
+    try {
+      unlinkSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
 export function recordLocalPublicOrigin(identity: PublicOriginIdentityV1, configDir?: string): void {
   ensureLabDirs(configDir);
   const dir = labPublicOriginDir(configDir);
-  const names = originNames(dir);
   const path = originPath(identity, configDir);
   try {
-    const existing = readOrigin(path, identity);
-    void existing;
+    readOrigin(path, identity);
     return;
   } catch (error) {
+    if (error instanceof PublicEvidenceValidationError) throw error;
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  let names = originNames(dir);
+  if (names.length >= MAX_ORIGINS) {
+    reclaimUnreferencedOrigins(dir, path, configDir);
+    names = originNames(dir);
   }
   if (names.length >= MAX_ORIGINS) {
     throw new PublicEvidenceValidationError("public_origin_bound", "public origin marker bound exceeded");
   }
+
   const bytes = originBody(identity);
   const published = publishPrivateFileExclusive(path, bytes);
   if (!published.created) {
@@ -94,12 +146,15 @@ export function recordLocalPublicOrigin(identity: PublicOriginIdentityV1, config
     return;
   }
 
-  // The pre-check is intentionally followed by a post-publication check. Separate CLI
-  // processes can both observe one free slot before either publishes. The loser removes
-  // only the marker it created, so the durable directory converges back inside the cap.
+  // Separate CLI processes can both observe one free slot before either publishes.
+  // Reclaim unreferenced history after publication, then remove only this call's marker
+  // if the directory still cannot converge inside the hard cap.
   if (originNames(dir).length > MAX_ORIGINS) {
-    try { unlinkSync(path); } catch { /* preserve the quota failure */ }
-    throw new PublicEvidenceValidationError("public_origin_bound", "public origin marker bound exceeded");
+    reclaimUnreferencedOrigins(dir, path, configDir);
+    if (originNames(dir).length > MAX_ORIGINS) {
+      try { unlinkSync(path); } catch { /* preserve the quota failure */ }
+      throw new PublicEvidenceValidationError("public_origin_bound", "public origin marker bound exceeded");
+    }
   }
 }
 
