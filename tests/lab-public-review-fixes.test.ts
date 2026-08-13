@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import {
   existsSync,
-  linkSync,
   mkdtempSync,
   readdirSync,
   rmSync,
@@ -146,23 +145,15 @@ test("corrupt origin provenance cannot retain mandatory local export bytes", () 
   expect(readdirSync(ensureLabDirs(home).exportDir)).toEqual([]);
 });
 
-test("unsafe optional community copies do not turn a completed export purge into failure", () => {
+test("unsafe locally-originated community copies fail the export purge closed", () => {
   const home = configDir("ocx-cl10-community-unsafe-");
   const bundle = signedBundle(home);
   writePublicEvidenceBundle(bundle, home);
   recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, home);
   const imported = importCommunityEvidenceBundle(bundle, home);
-  try {
-    linkSync(imported.path, `${imported.path}.hardlink`);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "ENOTSUP" || code === "EOPNOTSUPP") return;
-    throw error;
-  }
+  writeFileSync(imported.path, Buffer.alloc(2 * 1024 * 1024 + 1, 0x78), { mode: 0o600 });
 
-  const result = purgeLocalPublicEvidenceCopies(home);
-  expect(result.deletedExports).toBe(1);
-  expect(result.deletedCommunityBundles).toBe(0);
+  expect(() => purgeLocalPublicEvidenceCopies(home)).toThrow(/community|unsafe|purge/i);
   expect(readdirSync(ensureLabDirs(home).exportDir)).toEqual([]);
   expect(existsSync(imported.path)).toBe(true);
 });
