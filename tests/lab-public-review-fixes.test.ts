@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { ensureLabDirs, labPublicOriginDir } from "../src/lab/paths";
 import { purgeSensitiveEvidence } from "../src/lab/ledger/purge";
 import { replayLabLedger } from "../src/lab/ledger/store";
+import * as publicApi from "../src/lab/public";
 import {
   importCommunityEvidenceBundle,
   purgeLocalPublicEvidenceCopies,
@@ -92,21 +93,44 @@ test("decoded community objects are depth-bounded before JCS canonicalization", 
   }
 });
 
-test("public origin quota remains closed at 512 entries", () => {
+test("public barrel does not expose the private-file test fault setter", () => {
+  expect("setPrivateFileCommitFaultForTests" in publicApi).toBe(false);
+});
+
+test("public origin quota stays bounded when unreclaimable unexpected entries fill it", () => {
   const home = configDir("ocx-cl10-origin-bound-");
   ensureLabDirs(home);
   const dir = labPublicOriginDir(home);
-  for (let index = 0; index < 511; index += 1) {
-    writeFileSync(join(dir, `occupied-${String(index).padStart(3, "0")}`), "x", { mode: 0o600 });
+  for (let index = 0; index < 1024; index += 1) {
+    writeFileSync(join(dir, `occupied-${String(index).padStart(4, "0")}`), "x", { mode: 0o600 });
   }
 
-  recordLocalPublicOrigin({ publisherKeyId: hex("publisher-a"), bundleId: hex("bundle-a") }, home);
-  expect(readdirSync(dir)).toHaveLength(512);
   expect(() => recordLocalPublicOrigin({
-    publisherKeyId: hex("publisher-b"),
-    bundleId: hex("bundle-b"),
+    publisherKeyId: hex("publisher-bound"),
+    bundleId: hex("bundle-bound"),
   }, home)).toThrow(/origin marker bound/i);
-  expect(readdirSync(dir)).toHaveLength(512);
+  expect(readdirSync(dir)).toHaveLength(1024);
+});
+
+test("public origin pressure reclaims markers with no community copy", () => {
+  const home = configDir("ocx-cl10-origin-reclaim-");
+  ensureLabDirs(home);
+  const dir = labPublicOriginDir(home);
+  for (let index = 0; index < 1024; index += 1) {
+    const publisherKeyId = hex(`publisher-old-${index}`);
+    const bundleId = hex(`bundle-old-${index}`);
+    writeFileSync(
+      join(dir, `origin-${publisherKeyId}-${bundleId}.json`),
+      "{}",
+      { mode: 0o600 },
+    );
+  }
+
+  const current = { publisherKeyId: hex("publisher-current"), bundleId: hex("bundle-current") };
+  recordLocalPublicOrigin(current, home);
+  const names = readdirSync(dir);
+  expect(names).toHaveLength(1);
+  expect(names[0]).toBe(`origin-${current.publisherKeyId}-${current.bundleId}.json`);
 });
 
 test("corrupt origin provenance cannot retain mandatory local export bytes", () => {
