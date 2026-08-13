@@ -43,6 +43,13 @@ function hex(seed: string): string {
   return Bun.CryptoHasher.hash("sha256", seed, "hex");
 }
 
+function assertionsForScenario(scenarioId: string) {
+  const ids = scenarioId === "responses-core.protocol.sse-framing"
+    ? ["events", "text", "terminal"]
+    : ["method", "message", "temperature"];
+  return ids.map((id) => ({ id, operator: "equals", required: true, passed: true }));
+}
+
 function protocolObservation(scenarioId = "responses-core.protocol.request-shape"): ObservationEvent {
   const subject: ProtocolSubjectV1 = {
     subjectSchemaVersion: 1,
@@ -54,7 +61,6 @@ function protocolObservation(scenarioId = "responses-core.protocol.request-shape
     surface: "responses-http",
     behaviorFingerprint: hex("PRIVATE-community-behavior"),
   };
-  const assertionId = scenarioId === "responses-core.protocol.sse-framing" ? "events" : "method";
   return assignEventId({
     schemaVersion: LAB_EVENT_SCHEMA_VERSION,
     eventKind: "observation" as const,
@@ -77,7 +83,7 @@ function protocolObservation(scenarioId = "responses-core.protocol.request-shape
     attempt: 1,
     limits: { totalTimeoutMs: 1000 },
     outcome: "pass" as const,
-    assertions: [{ id: assertionId, operator: "equals", required: true, passed: true }],
+    assertions: assertionsForScenario(scenarioId),
     environment: {},
     artifactRefs: [],
   }) as ObservationEvent;
