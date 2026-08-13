@@ -61,7 +61,8 @@ function fsyncParentForPublication(path: string): void {
     fsyncSync(fd);
   } catch (error) {
     if (error instanceof Error && error.message.includes("synthetic private-file")) throw error;
-    throw new Error("private-file parent directory sync failed");
+    const code = (error as NodeJS.ErrnoException).code ?? "unknown";
+    throw new Error(`private-file parent directory sync failed (${code})`, { cause: error });
   } finally {
     if (fd !== null) closeSync(fd);
   }
@@ -96,19 +97,9 @@ export function cleanupStalePrivateFileStagesInDir(dir: string): void {
   if (changed) fsyncParentBestEffort(join(dir, "."));
 }
 
-/** Reclaim target-scoped staging links from writers that are definitely no longer alive. */
+/** Reclaim staging links from writers that are definitely no longer alive. */
 export function cleanupStalePrivateFileStages(finalPath: string): void {
-  const dir = dirname(finalPath);
-  cleanupStalePrivateFileStagesInDir(dir);
-  const prefix = staleTempPrefix(finalPath);
-  for (const name of readdirSync(dir)) {
-    if (!name.startsWith(prefix) || !name.endsWith(".tmp")) continue;
-    const match = PRIVATE_STAGE_RE.exec(name);
-    if (!match) continue;
-    const pid = Number(match[1]);
-    if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid || !pidDefinitelyDead(pid)) continue;
-    cleanup(join(dir, name));
-  }
+  cleanupStalePrivateFileStagesInDir(dirname(finalPath));
 }
 
 function writeAll(fd: number, bytes: Uint8Array): void {
@@ -172,7 +163,7 @@ export function readPublishedPrivateFile(path: string): Buffer {
   return readFileSync(path);
 }
 
-/** Test-only fault seam at the atomic publication point. */
+/** Test-only fault seam at the atomic publication point. Import this module directly in tests. */
 export function setPrivateFileCommitFaultForTests(fault: PrivateFileCommitFault): void {
   privateFileCommitFaultForTests = fault;
 }
