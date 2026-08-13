@@ -1,3 +1,4 @@
+import { unlinkSync } from "node:fs";
 import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
 import { queryLabEventById, queryLabVerdicts } from "../query";
@@ -266,16 +267,28 @@ function restoreImportedLocalOrigin(
   recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
 }
 
-export function importCommunityEvidenceFile(path: string, configDir?: string) {
-  const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(readBoundedPublicFile(path), configDir);
-  restoreImportedLocalOrigin(imported, configDir);
+function finishCommunityImport(
+  stored: { path: string; created: boolean; bundleId: string; publisherKeyId: string },
+  configDir?: string,
+) {
+  try {
+    restoreImportedLocalOrigin(stored, configDir);
+  } catch (error) {
+    if (stored.created) {
+      try { unlinkSync(stored.path); } catch { /* preserve provenance failure */ }
+    }
+    throw error;
+  }
+  const { path: _privatePath, ...imported } = stored;
   return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
 }
 
+export function importCommunityEvidenceFile(path: string, configDir?: string) {
+  return finishCommunityImport(importCommunityEvidenceBundle(readBoundedPublicFile(path), configDir), configDir);
+}
+
 export function importCommunityEvidenceValue(raw: unknown, configDir?: string) {
-  const { path: _privatePath, ...imported } = importCommunityEvidenceBundle(raw, configDir);
-  restoreImportedLocalOrigin(imported, configDir);
-  return { ...imported, trustClass: "community_untrusted_v1" as const, locallyVerified: false as const };
+  return finishCommunityImport(importCommunityEvidenceBundle(raw, configDir), configDir);
 }
 
 export function listCommunityEvidenceContext(configDir?: string) {
