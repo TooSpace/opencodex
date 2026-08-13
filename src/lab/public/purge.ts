@@ -10,6 +10,7 @@ import {
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
 import { publicEvidenceId } from "./ids";
 import { clearLocalPublicOrigins, listLocalPublicOrigins } from "./origin";
+import { publicEvidencePurgeFaultForTests } from "./purge-test-fault";
 import { readPublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
 
@@ -18,16 +19,6 @@ const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
 const EXPORT_FILE_RE = /^([0-9a-f]{64})\.json$/;
 const COMMUNITY_BUNDLE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 const COMMUNITY_REVOCATION_RE = /^revocation-([0-9a-f]{64})\.json$/;
-
-type PublicEvidencePurgeFaultForTests = "before_export_delete";
-let purgeFaultForTests: PublicEvidencePurgeFaultForTests | null = null;
-
-/** Internal deterministic fault seam. Import this module directly in tests. */
-export function setPublicEvidencePurgeFaultForTests(
-  fault: PublicEvidencePurgeFaultForTests | null,
-): void {
-  purgeFaultForTests = fault;
-}
 
 /**
  * Publisher provenance is useful only for classifying local community copies. A corrupt
@@ -76,7 +67,7 @@ function localExportIdentities(configDir?: string): Set<string> {
 }
 
 function purgeAllExports(configDir?: string): number {
-  if (purgeFaultForTests === "before_export_delete") {
+  if (publicEvidencePurgeFaultForTests() === "before_export_delete") {
     throw new Error("synthetic public export purge failure");
   }
   let deleted = 0;
