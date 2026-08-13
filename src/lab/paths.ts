@@ -90,15 +90,14 @@ export function labCommunityDir(configDir = getConfigDir()): string {
   return join(labRoot(configDir), "community");
 }
 
+export function labPublicOriginDir(configDir = getConfigDir()): string {
+  return join(labRoot(configDir), "public-origin-v1");
+}
+
 export const LAB_PUBLIC_PUBLISHER_KEY_FILE = "publisher-ed25519.pem";
-export const LAB_PUBLIC_ORIGIN_INDEX_FILE = "public-origin-v1.json";
 
 export function labPublicPublisherKeyPath(configDir = getConfigDir()): string {
   return join(labRoot(configDir), LAB_PUBLIC_PUBLISHER_KEY_FILE);
-}
-
-export function labPublicOriginIndexPath(configDir = getConfigDir()): string {
-  return join(labRoot(configDir), LAB_PUBLIC_ORIGIN_INDEX_FILE);
 }
 
 /** Opaque per-installation salt for local fingerprinting (never exported as evidence). */
@@ -127,17 +126,20 @@ export function ensureLabDirs(configDir = getConfigDir()): {
   scratchDir: string;
   exportDir: string;
   communityDir: string;
+  publicOriginDir: string;
 } {
   const root = labRoot(configDir);
   const artifactsDir = labArtifactsDir(configDir);
   const scratchDir = labScratchDir(configDir);
   const exportDir = labExportDir(configDir);
   const communityDir = labCommunityDir(configDir);
+  const publicOriginDir = labPublicOriginDir(configDir);
   ensureRestrictedDir(root, root);
   ensureRestrictedDir(artifactsDir, root);
   ensureRestrictedDir(scratchDir, root);
   ensureRestrictedDir(exportDir, root);
   ensureRestrictedDir(communityDir, root);
+  ensureRestrictedDir(publicOriginDir, root);
   return {
     root,
     ledgerPath: labLedgerPath(configDir),
@@ -146,5 +148,6 @@ export function ensureLabDirs(configDir = getConfigDir()): {
     scratchDir,
     exportDir,
     communityDir,
+    publicOriginDir,
   };
 }
