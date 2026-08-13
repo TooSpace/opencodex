@@ -16,10 +16,13 @@ export const MAX_PUBLIC_BUNDLE_ARTIFACTS = 16;
 export const MAX_PUBLIC_ARTIFACT_BYTES = 256 * 1024;
 export const MAX_PUBLIC_ARTIFACT_BYTES_TOTAL = 1024 * 1024;
 
-export interface BuildPublicEvidenceBundleInput {
+export interface PublicEvidenceContentInput {
   records: PublicEvidenceRecordV1[];
   artifacts: PublicArtifactV1[];
   createdDayUtc: string;
+}
+
+export interface BuildPublicEvidenceBundleInput extends PublicEvidenceContentInput {
   publisher: PublicPublisherV1;
 }
 
@@ -122,7 +125,8 @@ function validateArtifacts(artifacts: PublicArtifactV1[]): PublicArtifactV1[] {
   });
 }
 
-export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput): PublicEvidenceBundleUnsignedV1 {
+/** Validate all publisher-independent bundle content before any signing-key state is touched. */
+export function normalizePublicEvidenceContent(input: PublicEvidenceContentInput): PublicEvidenceContentInput {
   if (!Array.isArray(input.records) || input.records.length > MAX_PUBLIC_BUNDLE_RECORDS) {
     throw new PublicEvidenceValidationError("array_too_large", `records exceeds ${MAX_PUBLIC_BUNDLE_RECORDS}`);
   }
@@ -139,15 +143,27 @@ export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput)
       }
     }
   }
+  return { records, artifacts, createdDayUtc: utcDay(input.createdDayUtc) };
+}
+
+export function hasCanonicalPublicEvidenceOrder(input: PublicEvidenceContentInput): boolean {
+  const normalized = normalizePublicEvidenceContent(input);
+  return input.records.length === normalized.records.length
+    && input.artifacts.length === normalized.artifacts.length
+    && input.records.every((record, index) => record.recordId === normalized.records[index]!.recordId)
+    && input.artifacts.every((artifact, index) => artifact.artifactId === normalized.artifacts[index]!.artifactId);
+}
+
+export function buildPublicEvidenceBundle(input: BuildPublicEvidenceBundleInput): PublicEvidenceBundleUnsignedV1 {
+  const normalized = normalizePublicEvidenceContent(input);
   const publisher = validatePublisher(input.publisher);
-  const createdDayUtc = utcDay(input.createdDayUtc);
   const content = {
     schemaVersion: PUBLIC_EVIDENCE_BUNDLE_SCHEMA_VERSION,
     exportPolicyVersion: PUBLIC_EXPORT_POLICY_VERSION,
-    createdDayUtc,
+    createdDayUtc: normalized.createdDayUtc,
     publisher,
-    records,
-    artifacts,
+    records: normalized.records,
+    artifacts: normalized.artifacts,
   };
   const bundleId = publicEvidenceId("bundle", content);
   const bundleDigest = publicEvidenceId("bundle_digest", { ...content, bundleId });
