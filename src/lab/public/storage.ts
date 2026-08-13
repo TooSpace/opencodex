@@ -1,23 +1,15 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  openSync,
-  readFileSync,
-} from "node:fs";
 import { join } from "node:path";
 import { isSha256Hex, jcsStringify } from "../digest";
 import { ensureLabDirs } from "../paths";
 import { MAX_PUBLIC_BUNDLE_BYTES } from "./bundle";
 import { validatePublicEvidenceAuthorities } from "./community-authority";
+import { readPrivateRegularFile } from "./file-safety";
 import { cleanupStalePrivateFileStages, publishPrivateFileExclusive } from "./private-file";
 import { validatePublicEvidencePrivacy } from "./privacy";
 import { parseStrictPublicJson } from "./strict-json";
 import type { PublicEvidenceBundleV1 } from "./types";
 import { verifyPublicEvidenceBundle } from "./signature";
 import { PublicEvidenceValidationError } from "./validate";
-
-const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
 
 function encodedBytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -37,33 +29,21 @@ function assertLocalArtifactExportAuthority(bundle: PublicEvidenceBundleV1): voi
   }
 }
 
-function readPrivateRegularFile(path: string): Buffer {
+function readLocalExport(path: string): Buffer {
   cleanupStalePrivateFileStages(path);
-  const fd = openSync(path, fsConstants.O_RDONLY | O_NOFOLLOW);
-  try {
-    const stats = fstatSync(fd);
-    if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
-      throw new PublicEvidenceValidationError("public_file_unsafe", "public export is not a private regular file");
-    }
-    if (process.platform !== "win32" && (stats.mode & 0o777) !== 0o600) {
-      throw new PublicEvidenceValidationError("public_file_unsafe", "public export permissions must be 0600");
-    }
-    if (stats.size > MAX_PUBLIC_BUNDLE_BYTES) {
-      throw new PublicEvidenceValidationError("public_file_too_large", "public bundle exceeds 2 MiB");
-    }
-    const bytes = readFileSync(fd);
-    if (bytes.byteLength > MAX_PUBLIC_BUNDLE_BYTES) {
-      throw new PublicEvidenceValidationError("public_file_too_large", "public bundle exceeds 2 MiB");
-    }
-    return bytes;
-  } finally {
-    closeSync(fd);
-  }
+  return readPrivateRegularFile(path, {
+    maxBytes: MAX_PUBLIC_BUNDLE_BYTES,
+    errorCode: "public_file_unsafe",
+    errorMessage: "public export is not a private regular file with 0600 permissions",
+    sizeErrorCode: "public_file_too_large",
+    sizeErrorMessage: "public bundle exceeds 2 MiB",
+    requireMode600: true,
+  });
 }
 
 function existingBody(path: string): string | null {
   try {
-    return readPrivateRegularFile(path).toString("utf8");
+    return readLocalExport(path).toString("utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -111,7 +91,7 @@ export function writePublicEvidenceBundle(bundle: PublicEvidenceBundleV1, config
 }
 
 export function readPublicEvidenceBundle(bundleId: string, configDir?: string): PublicEvidenceBundleV1 {
-  const bytes = readPrivateRegularFile(bundlePath(bundleId, configDir));
+  const bytes = readLocalExport(bundlePath(bundleId, configDir));
   const raw = parseStrictPublicJson(bytes, "public export", "public_file_json");
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     throw new PublicEvidenceValidationError("public_file_json", "public export must contain a bundle object");
