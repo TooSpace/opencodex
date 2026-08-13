@@ -334,7 +334,7 @@ describe("routed tool-discovery backward compatibility", () => {
   // 023_backward_compatibility_tests.md: the load-bearing promise of this feature is that an
   // unconfigured tree is unchanged. Assert the WHOLE emitted row, not just the two policy
   // fields, so an unrelated key silently appearing on routed rows also fails here.
-  it("emits byte-identical routed rows with zero configuration", () => {
+  it("emits identical rows whether the deferred default is implicit or explicit", () => {
     const withoutPolicy = buildCatalogEntries(null, [], [{ provider: "deepseek", id: "glm-5.2" }]);
     const withExplicitAuto = buildCatalogEntries(null, [], [
       { provider: "deepseek", id: "glm-5.2", toolDiscoveryMode: "deferred" },
@@ -483,6 +483,42 @@ describe("routed tool-discovery backward compatibility", () => {
       // Never echo the offending value; provider config can hold secrets.
       expect(joined).not.toContain("eager");
       expect(joined).not.toContain("nope");
+    });
+  });
+
+  it("warns when a blank model key silently drops the whole map on load", () => {
+    // `z.string().min(1)` rejects the key and takes the entire map with it, so a
+    // value-only warning would let the map vanish without a word.
+    withTempHome(() => {
+      const base = {
+        port: 10100,
+        defaultProvider: "test",
+        providers: {
+          test: {
+            adapter: "openai-chat",
+            baseUrl: "http://127.0.0.1:1/v1",
+            apiKey: "k",
+            allowPrivateNetwork: true,
+            modelRoutedToolDiscovery: { "": "direct" },
+          },
+        },
+      };
+      saveConfig(base as never);
+      writeFileSync(getConfigPath(), `${JSON.stringify(base, null, 2)}\n`);
+
+      const warnings: string[] = [];
+      const original = console.warn;
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+      let loaded;
+      try { loaded = loadConfig(); }
+      finally { console.warn = original; }
+
+      const provider = loaded.providers.test as unknown as Record<string, unknown>;
+      expect(provider.apiKey).toBe("k");
+      expect(provider.modelRoutedToolDiscovery).toBeUndefined();
+      const joined = warnings.join("\n");
+      expect(joined).toContain("modelRoutedToolDiscovery");
+      expect(joined).toContain("blank model key");
     });
   });
 

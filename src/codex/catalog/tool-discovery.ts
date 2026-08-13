@@ -6,7 +6,7 @@ import { modelRecordValue } from "../../reasoning-effort";
  *
  * `supports_search_tool` selects Codex's DEFERRED tool-discovery surface. It is not the
  * hosted web-search capability (`web_search_tool_type`), and under `tool_mode =
- * code_mode_only` it does not decide whether an eligible MCP tool is reachable: upstream
+ * code_mode_only` it appears not to decide whether an eligible MCP tool is reachable: upstream
  * installs nested tool specs on the code-mode `tools`/`ALL_TOOLS` globals in BOTH
  * exposures (codex-rs `spec_plan.rs` build_code_mode_executors → `code-mode/src/runtime/
  * globals.rs`). What changes is where the schemas live — direct exposure embeds every MCP

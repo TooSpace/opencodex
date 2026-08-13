@@ -1638,6 +1638,12 @@ function warnDegradedRoutedToolDiscoveryForLoad(parsed: unknown): void {
       continue;
     }
     for (const [modelId, value] of Object.entries(map as Record<string, unknown>)) {
+      // A blank key fails the schema's `z.string().min(1)` and takes the WHOLE map with it,
+      // so it needs its own warning: reporting only bad values would drop the map silently.
+      if (modelId.trim() === "") {
+        console.warn(`⚠️  config.json providers.${safeProviderName}.modelRoutedToolDiscovery has a blank model key — ignoring the whole map`);
+        break;
+      }
       if (isRoutedToolDiscoveryMode(value)) continue;
       const safeModelId = JSON.stringify(redactSecretString(modelId));
       console.warn(`⚠️  config.json providers.${safeProviderName}.modelRoutedToolDiscovery.${safeModelId} (${typeof value}) is invalid — ignoring the whole map`);

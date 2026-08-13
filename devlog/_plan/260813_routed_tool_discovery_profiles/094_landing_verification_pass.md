@@ -157,9 +157,10 @@ executed differential rather than on a source reading. The expected delta is
 `exec.description` content/size **plus** `tool_search` construction and the
 deferred-guidance text — not `exec.description` alone.
 
-This reframes the override honestly: for an eligible tool under code mode it is a
-*model-comprehension* lever (the model sees full schemas inline instead of having
-to consult `ALL_TOOLS`), not a *reachability* lever. `010`'s non-goal list already
+This reframes the override honestly: on the source reading above, for an eligible tool
+under code mode it is a *model-comprehension* lever (the model sees full schemas inline
+instead of having to consult `ALL_TOOLS`) rather than a *reachability* lever — still
+pending the executed differential `020` owes. `010`'s non-goal list already
 says "no claim that `direct` is cheaper or preferred"; it must also say direct is
 not a reachability fix for eligible tools under code mode. `044`'s weak-model
 fallback rationale is the honest use case.

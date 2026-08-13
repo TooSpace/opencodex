@@ -26,7 +26,8 @@
 > re-resolution), the full `025` five-row matrix plus deferred-key omission and
 > every alias shape (bare, slashed, native), each pinned to an exact emitted slug so
 > deleting alias propagation turns them red, the `023` on-disk load/save
-> round trip and downgrade preservation, and the `020` malformed-load warning.
+> round trip and downgrade preservation, and the `020` malformed-load warning, including the blank-model-key case where the
+> schema drops the entire map.
 >
 > The retracted claim is left visible on purpose: this unit exists because a
 > plan asserted more verification than it had.
