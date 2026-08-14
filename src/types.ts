@@ -639,16 +639,17 @@ export interface OcxConfig {
   subagentModels?: string[];
   /**
    * Optional full picker ordering for the Codex model catalog, independent of the
-   * 5-slot `subagentModels` spawn_agent cap. Values are catalog ids in the same forms
-   * accepted by `subagentModels` (bare native ids, account-qualified, or routed
-   * `<provider>/<model>` slugs). Listed routed rows are ordered among themselves in array
-   * order, in a reserved high priority tier that sits below the spawn_agent candidate
-   * window; rows not listed keep their normal priority and are not reordered. Intended for
-   * pinning a full multi-provider catalog: list every routed model you want ordered.
-   * `subagentModels`-featured rows keep their existing top priority and win regardless.
-   * When unset or empty, catalog priority is unchanged. This affects picker display order
-   * only; it does not widen the spawn_agent candidate set or change which rows are
-   * spawn_agent candidates.
+   * 5-slot `subagentModels` spawn_agent cap. Values are routed `<provider>/<model>` catalog
+   * slugs (matched by exact slug or `provider/id`); this is the surface the feature targets
+   * — the long multi-provider routed catalogs where >5 rows otherwise reshuffle on rebuild.
+   * Native OpenAI passthrough rows and account-qualified native rows are NOT reordered by
+   * this field (order native rows via `subagentModels`). Listed routed rows are ordered
+   * among themselves in array order, in a reserved high priority tier that sits below the
+   * spawn_agent candidate window; routed rows not listed keep their normal priority and are
+   * not reordered. `subagentModels`-featured rows keep their existing top priority and win
+   * regardless. When unset or empty, catalog priority is unchanged. This affects picker
+   * display order only; it does not widen the spawn_agent candidate set or change which rows
+   * are spawn_agent candidates.
    */
   modelPickerOrder?: string[];
   /**

@@ -463,6 +463,11 @@ export function buildCatalogEntriesFromObservedState({
    * without entering the spawn_agent candidate window. Returns undefined when the feature is off or
    * the row is not listed, so those rows keep their original assignment (default 5 / account
    * 1_000+) untouched.
+   *
+   * Scope: only the generic routed `<provider>/<model>` rows call this (see the goModels loop
+   * below). Native passthrough rows and account-qualified native rows keep their own priority
+   * logic and are intentionally not reordered here — this matches the documented contract on
+   * OcxConfig.modelPickerOrder (route native ordering through subagentModels instead).
    */
   const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
     if (!pickerOrderActive) return undefined;

@@ -125,4 +125,29 @@ describe("modelPickerOrder (#1649)", () => {
     expect(candidateSlugs).not.toContain("tyler/deepseek-v4-pro");
     expect(candidateSlugs).not.toContain("jd-chat/kimi-k3");
   });
+
+  // Documents the scope boundary raised in review: modelPickerOrder targets routed
+  // <provider>/<model> rows only. A bare native slug listed here must NOT reorder its native
+  // passthrough row (native ordering goes through subagentModels).
+  test("a bare native slug in modelPickerOrder does not reorder its native row", () => {
+    const entries = buildCatalogEntriesFromObservedState({
+      template: template() as never,
+      gptSlugs: ["gpt-5.5", "gpt-5.4"],
+      goModels: [{ id: "glm-5.2", provider: "jd-chat", owned_by: "jd" }] as unknown as CatalogModel[],
+      featured: [],
+      modelPickerOrder: ["gpt-5.4", "jd-chat/glm-5.2"],
+      wsEnabled: false,
+      multiAgentMode: "default",
+      exactComboSlugs: new Set(),
+      accountSelectors: [],
+      suppressedBareNativeSlugs: new Set(),
+      disabledNativeAccountSlugs: new Set(),
+      multiAgentV2Enabled: false,
+    });
+    const p = Object.fromEntries((entries as Record<string, unknown>[]).map(e => [e.slug as string, e.priority as number]));
+    // The native row keeps its native priority (9), untouched by modelPickerOrder.
+    expect(p["gpt-5.4"]).toBe(9);
+    // The routed row IS placed in the high picker tier.
+    expect(p["jd-chat/glm-5.2"]).toBeGreaterThanOrEqual(1000);
+  });
 });
