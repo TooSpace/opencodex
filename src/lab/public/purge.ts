@@ -22,6 +22,7 @@ import {
 } from "./community-files";
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
 import { publicEvidenceId } from "./ids";
+import { withPublicEvidenceMutationLock } from "./mutation-lock";
 import { clearLocalPublicOrigins } from "./origin";
 import { listValidPublicOriginsForPurge } from "./origin-purge";
 import { publicEvidencePurgeFaultForTests } from "./purge-test-fault";
@@ -105,7 +106,9 @@ function purgeAllExports(configDir?: string): number {
     rmSync(join(exportDir, entry.name), { recursive: entry.isDirectory(), force: true });
     deleted += 1;
   }
-  if (deleted > 0) syncPurgeDirectory(exportDir, "export");
+  // A previous attempt may already have removed all names but failed its directory
+  // fsync. Re-sync even when this retry deletes zero entries before reporting success.
+  syncPurgeDirectory(exportDir, "export");
   return deleted;
 }
 
@@ -145,13 +148,11 @@ function communityObjectPublisherKeyId(path: string): string | null {
   }
 }
 
-export function purgeLocalPublicEvidenceCopies(configDir?: string): {
+function purgeLocalPublicEvidenceCopiesLocked(configDir?: string): {
   deletedExports: number;
   deletedCommunityBundles: number;
   deletedCommunityRevocations: number;
 } {
-  ensureLabDirs(configDir);
-
   const exportedIdentities = localExportIdentities(configDir);
   const localPublisherKeyIds = new Set<string>();
   for (const origin of listValidPublicOriginsForPurge(configDir)) {
@@ -189,13 +190,25 @@ export function purgeLocalPublicEvidenceCopies(configDir?: string): {
       }
     }
   }
-  if (deletedCommunityBundles > 0 || deletedCommunityRevocations > 0) {
-    syncPurgeDirectory(communityDir, "community");
-  }
+  // As with exports, a retry after a failed directory fsync may have no remaining
+  // names to unlink. Re-sync the directory unconditionally before success.
+  syncPurgeDirectory(communityDir, "community");
 
   // Markers are purge-owned public provenance only. Remove them last, then establish
   // deletion durability before the caller may record an export purge tombstone.
   clearLocalPublicOrigins(configDir);
   syncPurgeDirectory(labPublicOriginDir(configDir), "origin");
   return { deletedExports, deletedCommunityBundles, deletedCommunityRevocations };
+}
+
+export function purgeLocalPublicEvidenceCopies(configDir?: string): {
+  deletedExports: number;
+  deletedCommunityBundles: number;
+  deletedCommunityRevocations: number;
+} {
+  ensureLabDirs(configDir);
+  return withPublicEvidenceMutationLock(
+    configDir,
+    () => purgeLocalPublicEvidenceCopiesLocked(configDir),
+  );
 }
