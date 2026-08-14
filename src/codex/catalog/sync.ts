@@ -362,6 +362,8 @@ export interface ObservedCatalogEntryBuildInput {
   readonly gptSlugs: readonly string[];
   readonly goModels: readonly CatalogModel[];
   readonly featured?: readonly string[];
+  /** Optional full picker ordering (config.modelPickerOrder); orders non-featured rows. */
+  readonly modelPickerOrder?: readonly string[];
   readonly wsEnabled: boolean;
   readonly multiAgentMode: MultiAgentMode;
   readonly exactComboSlugs: ReadonlySet<string>;
@@ -416,6 +418,7 @@ export function buildCatalogEntriesFromObservedState({
   gptSlugs,
   goModels,
   featured,
+  modelPickerOrder,
   wsEnabled,
   multiAgentMode,
   exactComboSlugs,
@@ -433,6 +436,28 @@ export function buildCatalogEntriesFromObservedState({
   // it sorts to the front. This works for native gpt slugs AND routed slugs alike.
   const rank = new Map((featured ?? []).map((slug, i) => [slug, i] as const));
   const priorityStride = Math.max(accountSelectors.length, 1);
+  // Optional full picker order (#1649). Independent of the 5-slot spawn_agent cap: it only
+  // assigns a deterministic priority BAND to non-featured rows so a >5 catalog stays put across
+  // rebuilds. Featured rows keep their existing 0..N-1 band; when modelPickerOrder is unset the
+  // helper is a no-op and every priority below is byte-identical to before.
+  const pickerOrder = (modelPickerOrder ?? []).filter(id => typeof id === "string" && id.length > 0);
+  const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
+  const pickerOrderActive = pickerOrder.length > 0;
+  // Band base sits just past the featured band so listed rows sort right after featured ones.
+  const pickerOrderBase = (featured?.length ?? 0) * priorityStride + 1;
+  let nonFeaturedFallbackSeq = 0;
+  /**
+   * Priority for a non-featured routed row when modelPickerOrder is active. Listed slugs sort in
+   * declared order right after featured; unlisted rows keep their mutual order but sit after every
+   * listed one. Returns undefined when the feature is off, so the caller's original assignment
+   * (default 5 / account 1_000+) is preserved untouched.
+   */
+  const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
+    if (!pickerOrderActive) return undefined;
+    const hit = pickerOrderRank.get(slug) ?? (altSlug !== undefined ? pickerOrderRank.get(altSlug) : undefined);
+    if (hit !== undefined) return pickerOrderBase + hit * priorityStride;
+    return pickerOrderBase + (pickerOrder.length + nonFeaturedFallbackSeq++) * priorityStride;
+  };
   const out: RawEntry[] = [];
   const nativeEntries: RawEntry[] = [];
   const collisionSkipped = resolveSlugAliasCollisions([...goModels]);
@@ -538,6 +563,10 @@ export function buildCatalogEntriesFromObservedState({
     // Featured picks may be stored raw (legacy) or encoded — honor both.
     const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
+    else if (pickerOrderActive) {
+      // #1649: modelPickerOrder assigns the full non-featured order deterministically.
+      e.priority = pickerOrderPriority(slug, `${m.provider}/${m.id}`)!;
+    }
     else if (accountSelectors.length > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.
       e.priority = 1_000 + (typeof e.priority === "number" ? e.priority : 5);
@@ -1324,6 +1353,7 @@ function writeRetainedCatalogSync({
   const enabledGo = filterCatalogVisibleModels(goModels, config);
   const featured = config.subagentModels ?? [];
   const orderedGoModels = orderForSubagents(enabledGo, featured); // stable tie-break among equal priorities
+  const modelPickerOrder = config.modelPickerOrder ?? [];
   const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const suppressedBareNativeSlugs = desktopAllowlistSuppressedNativeSlugs(config);
@@ -1355,6 +1385,7 @@ function writeRetainedCatalogSync({
     gptSlugs: [],
     goModels: orderedGoModels,
     featured,
+    modelPickerOrder,
     wsEnabled,
     multiAgentMode,
     exactComboSlugs,
