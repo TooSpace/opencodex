@@ -1,11 +1,3 @@
-import {
-  closeSync,
-  constants as fsConstants,
-  fsyncSync,
-  openSync,
-  unlinkSync,
-} from "node:fs";
-import { dirname } from "node:path";
 import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
 import { queryLabEvents, queryLabVerdicts } from "../query";
@@ -14,6 +6,7 @@ import {
   importCommunityEvidenceBundle,
   listCommunityEvidence,
 } from "./community";
+import { readPrivateRegularFile } from "./file-safety";
 import { withPublicEvidenceMutationLock } from "./mutation-lock";
 import { recordLocalPublicOrigin } from "./origin";
 import type { ProjectPublicEvidenceRecordInput } from "./project";
@@ -32,7 +25,6 @@ import type {
   PublicEvidenceRecordV1,
   PublicProjectionNotExportableReason,
 } from "./types";
-import { readPrivateRegularFile } from "./file-safety";
 import { PublicEvidenceValidationError } from "./validate";
 
 const MAX_OPERATOR_EVENTS = 256;
@@ -253,35 +245,6 @@ export function previewLocalPublicEvidence(
   return { bundle: projected.bundle, excluded };
 }
 
-function syncRollbackDirectory(path: string): void {
-  if (process.platform === "win32") return;
-  let fd: number | null = null;
-  try {
-    fd = openSync(dirname(path), fsConstants.O_RDONLY);
-    fsyncSync(fd);
-  } catch {
-    throw new PublicEvidenceValidationError(
-      "public_export_provenance_rollback_failed",
-      "public export rollback could not be made durable",
-    );
-  } finally {
-    if (fd !== null) closeSync(fd);
-  }
-}
-
-function rollbackNewExport(path: string): void {
-  try {
-    unlinkSync(path);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw new PublicEvidenceValidationError(
-      "public_export_provenance_rollback_failed",
-      "public export rollback failed after provenance commit failure",
-    );
-  }
-  syncRollbackDirectory(path);
-}
-
 export function exportLocalPublicEvidence(
   input: { eventIds: readonly string[] },
   configDir?: string,
@@ -297,13 +260,11 @@ export function exportLocalPublicEvidence(
     configDir,
   });
   return withPublicEvidenceMutationLock(configDir, () => {
+    // Commit purge-owned provenance first. If export publication later fails or the
+    // process crashes, an orphan marker is conservative and can be reclaimed later;
+    // the inverse state, a durable export without provenance, is not acceptable.
+    recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
     const stored = storePublicEvidenceBundle(bundle, configDir);
-    try {
-      recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
-    } catch (error) {
-      if (stored.created) rollbackNewExport(stored.path);
-      throw error;
-    }
     return {
       bundle,
       stored: { path: PRIVATE_STORAGE_LOCATOR, created: stored.created },
