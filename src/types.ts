@@ -639,17 +639,16 @@ export interface OcxConfig {
   subagentModels?: string[];
   /**
    * Optional full picker ordering for the Codex model catalog, independent of the
-   * 5-slot `subagentModels` spawn_agent cap. Values are routed `<provider>/<model>` catalog
-   * slugs (matched by exact slug or `provider/id`); this is the surface the feature targets
-   * — the long multi-provider routed catalogs where >5 rows otherwise reshuffle on rebuild.
-   * Native OpenAI passthrough rows and account-qualified native rows are NOT reordered by
-   * this field (order native rows via `subagentModels`). Listed routed rows are ordered
-   * among themselves in array order, in a reserved high priority tier that sits below the
-   * spawn_agent candidate window; routed rows not listed keep their normal priority and are
-   * not reordered. `subagentModels`-featured rows keep their existing top priority and win
-   * regardless. When unset or empty, catalog priority is unchanged. This affects picker
-   * display order only; it does not widen the spawn_agent candidate set or change which rows
-   * are spawn_agent candidates.
+   * 5-slot `subagentModels` spawn_agent cap. DISPLAY-ONLY: it controls the visual order of
+   * the Codex model picker for large routed catalogs (10-20+ models) that would otherwise sort
+   * arbitrarily and reshuffle on every rebuild. Values are routed `<provider>/<model>` catalog
+   * slugs (matched by exact slug or `provider/id`); native OpenAI passthrough rows and
+   * account-qualified native rows are not reordered (order native rows via `subagentModels`).
+   * Listed routed rows appear in array order; rows not listed keep their normal display order.
+   * `subagentModels`-featured rows keep their top position. When unset or empty, catalog
+   * priority is unchanged. This changes ONLY what the user sees in the picker: the spawn_agent
+   * candidate set is derived from each row's natural priority and is provably unaffected, even
+   * when every routed row is listed (see opencodex_spawn_priority / effectiveSubagentRoster).
    */
   modelPickerOrder?: string[];
   /**

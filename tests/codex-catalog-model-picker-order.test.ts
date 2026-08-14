@@ -150,4 +150,39 @@ describe("modelPickerOrder (#1649)", () => {
     // The routed row IS placed in the high picker tier.
     expect(p["jd-chat/glm-5.2"]).toBeGreaterThanOrEqual(1000);
   });
+
+  // Decisive regression for #1666: even when EVERY routed row is listed in modelPickerOrder in
+  // reverse order (exhausting the default tier entirely), the spawn_agent candidate SET is
+  // unchanged. This is the case a single display-priority band cannot satisfy; the candidate
+  // window is derived from the natural priority (opencodex_spawn_priority), not display order.
+  test("candidate set is unchanged when all routed rows are listed in reverse order", () => {
+    const sixRouted = [
+      { id: "m1", provider: "jd-chat", owned_by: "jd" },
+      { id: "m2", provider: "jd-chat", owned_by: "jd" },
+      { id: "m3", provider: "jd-chat", owned_by: "jd" },
+      { id: "m4", provider: "jd-chat", owned_by: "jd" },
+      { id: "m5", provider: "jd-chat", owned_by: "jd" },
+      { id: "m6", provider: "jd-chat", owned_by: "jd" },
+    ] as unknown as CatalogModel[];
+    const buildWith = (modelPickerOrder?: string[]) => buildCatalogEntriesFromObservedState({
+      template: template() as never,
+      gptSlugs: [],
+      goModels: sixRouted,
+      featured: [],
+      modelPickerOrder,
+      wsEnabled: false,
+      multiAgentMode: "default",
+      exactComboSlugs: new Set(),
+      accountSelectors: [],
+      suppressedBareNativeSlugs: new Set(),
+      disabledNativeAccountSlugs: new Set(),
+      multiAgentV2Enabled: false,
+    });
+    const baseline = effectiveSubagentRoster([], "default", buildWith(undefined)).candidates.map(c => c.model);
+    const reversed = ["jd-chat/m6", "jd-chat/m5", "jd-chat/m4", "jd-chat/m3", "jd-chat/m2", "jd-chat/m1"];
+    const withOrder = effectiveSubagentRoster([], "default", buildWith(reversed)).candidates.map(c => c.model);
+    // The candidate SET (membership) is identical regardless of display reordering.
+    expect([...withOrder].sort()).toEqual([...baseline].sort());
+    expect(withOrder.length).toBe(MAX_SPAWN_AGENT_MODEL_OVERRIDES);
+  });
 });
