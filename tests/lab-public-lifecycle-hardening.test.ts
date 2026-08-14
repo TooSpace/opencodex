@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -166,6 +167,28 @@ describe("CL-10 public lifecycle hardening", () => {
     expect(readdirSync(labExportDir(local))).toEqual([]);
     expect(listLocalPublicOrigins(local)).toEqual([]);
     expect(listCommunityEvidence(local).map((row) => row.bundleId)).toEqual([thirdPartyBundle.bundleId]);
+  });
+
+  test("unsafe local community cleanup does not turn a successful export purge into failure", () => {
+    const local = configDir("ocx-cl10-unsafe-community-purge-");
+    const localBundle = signedBundle(local);
+    writePublicEvidenceBundle(localBundle, local);
+    recordLocalPublicOrigin({
+      publisherKeyId: localBundle.publisher.keyId,
+      bundleId: localBundle.bundleId,
+    }, local);
+    const imported = importCommunityEvidenceBundle(localBundle, local);
+
+    // Make the stored public community object fail the single-link safety check.
+    // Community cleanup is optional, while local export deletion is mandatory.
+    linkSync(imported.path, join(local, "community-hardlink-witness.json"));
+
+    expect(purgeLocalPublicEvidenceCopies(local)).toMatchObject({
+      deletedExports: 1,
+      deletedCommunityBundles: 0,
+    });
+    expect(readdirSync(labExportDir(local))).toEqual([]);
+    expect(existsSync(imported.path)).toBe(true);
   });
 
   test("duplicate-key revocation JSON is rejected before persistence", () => {
