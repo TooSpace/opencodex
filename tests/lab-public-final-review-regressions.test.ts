@@ -6,8 +6,6 @@ import { ensureLabDirs, labPublicOriginDir } from "../src/lab/paths";
 import {
   createPublicEvidenceRevocation,
   importCommunityEvidenceBundle,
-  importCommunityEvidenceRevocation,
-  listCommunityEvidence,
   listLocalPublicOrigins,
   purgeLocalPublicEvidenceCopies,
   publicEvidenceId,
@@ -113,26 +111,21 @@ test("successful local export reasserts provenance after export storage", () => 
   expect(postStoreOrigin).toBeGreaterThan(stored);
 });
 
-test("one signed revocation can cover multiple verified bundles from the same publisher", () => {
+test("V1 revocation rejects targets that span multiple bundle anchors", () => {
   const publisher = configDir("ocx-cl10-multibundle-rev-publisher-");
-  const consumer = configDir("ocx-cl10-multibundle-rev-consumer-");
   const first = bundle(publisher, "2026-08-12");
   const second = bundle(publisher, "2026-08-13");
-  importCommunityEvidenceBundle(first, consumer);
-  importCommunityEvidenceBundle(second, consumer);
 
-  const revocation = createPublicEvidenceRevocation({
+  expect(() => createPublicEvidenceRevocation({
     configDir: publisher,
-    targetBundles: [first, second],
+    targetBundle: first,
     issuedDayUtc: "2026-08-13",
     reason: "superseded",
     targets: [
       { kind: "bundle", id: first.bundleId },
       { kind: "bundle", id: second.bundleId },
     ],
-  } as any);
-  expect(importCommunityEvidenceRevocation(revocation, consumer).created).toBe(true);
-  expect(listCommunityEvidence(consumer).map((row) => row.activeRecordCount)).toEqual([0, 0]);
+  })).toThrow();
 });
 
 test("export purge fails closed when POSIX export-directory durability cannot be established", () => {
