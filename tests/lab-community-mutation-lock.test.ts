@@ -68,6 +68,19 @@ describe("community mutation lock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  test("cleans detached lock quarantine before scanning community quota state", () => {
+    const config = configDir();
+    const quarantinePath = join(
+      labCommunityDir(config),
+      ".mutation-lock-release-123-00000000-0000-4000-8000-000000000000",
+    );
+    mkdirSync(quarantinePath, { mode: 0o700 });
+    writeFileSync(join(quarantinePath, "owner.json"), "stale", { mode: 0o600 });
+
+    expect(listCommunityEvidence(config)).toEqual([]);
+    expect(existsSync(quarantinePath)).toBe(false);
+  });
+
   test("fails closed when the lock path is not a directory", () => {
     const config = configDir();
     writeFileSync(join(labCommunityDir(config), ".mutation-lock"), "unsafe", "utf8");
