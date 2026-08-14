@@ -51,6 +51,24 @@ describe("community mutation lock", () => {
     expect(existsSync(lockPath)).toBe(true);
   });
 
+  test("eventually reclaims an ancient owner record even when its pid has been reused", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    mkdirSync(lockPath, { mode: 0o700 });
+    const ancient = Date.now() - (25 * 60 * 60 * 1000);
+    writeFileSync(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        token: "00000000-0000-4000-8000-000000000000",
+        createdAt: ancient,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+
+    expect(publicEvidenceMutationLockIsReclaimableForTests(config)).toBe(true);
+  });
+
   test("fails closed when the lock path is not a directory", () => {
     const config = configDir();
     writeFileSync(join(labCommunityDir(config), ".mutation-lock"), "unsafe", "utf8");
