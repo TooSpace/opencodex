@@ -252,17 +252,20 @@ function releaseReclaimClaim(lockPath: string, claim: MutationLockReclaim): void
 }
 
 function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
-  // The first check avoids creating claim files on every healthy contention.
-  // The authoritative stale decision happens again only after this process owns
-  // the exclusive reclaim claim.
+  // Capture the exact stale directory before the claim write changes its mtime.
+  // After claiming, revalidate the inode and owner instead of reusing an age check
+  // that our own .reclaim.json creation would make appear fresh.
   if (!mutationLockIsReclaimable(lockPath, nowMs)) return false;
+  const staleDirectory = currentDirectoryIdentity(lockPath);
   const claim = tryAcquireReclaimClaim(lockPath, nowMs);
   if (!claim) return false;
 
   let moved = false;
   try {
     if (!reclaimClaimStillOwned(lockPath, claim)) return false;
-    if (!mutationLockIsReclaimable(lockPath, Date.now())) return false;
+    if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), staleDirectory)) return false;
+    const currentOwner = readMutationLockOwner(lockPath);
+    if (currentOwner && !pidDefinitelyDead(currentOwner.pid)) return false;
     if (!reclaimClaimStillOwned(lockPath, claim)) return false;
 
     const quarantinePath = join(
