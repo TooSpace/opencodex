@@ -1,9 +1,10 @@
-import { lstatSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { jcsStringify } from "../digest";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { validateCommunityEvidenceAuthorities } from "./community-authority";
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
+import { withPublicEvidenceMutationLock } from "./mutation-lock";
 import { recordLocalPublicOrigin } from "./origin";
 import {
   cleanupStalePrivateFileStages,
@@ -30,9 +31,6 @@ const MAX_OBJECT_KEYS = 64;
 const MAX_ARRAY_ELEMENTS = 512;
 const MAX_GENERIC_STRING_BYTES = 384 * 1024;
 const COMMUNITY_MUTATION_LOCK_NAME = ".mutation-lock";
-const COMMUNITY_MUTATION_LOCK_TIMEOUT_MS = 5_000;
-const COMMUNITY_MUTATION_LOCK_STALE_MS = 60_000;
-const COMMUNITY_MUTATION_LOCK_POLL_MS = 10;
 const COMMUNITY_BUNDLE_FILE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 const COMMUNITY_REVOCATION_FILE_RE = /^revocation-([0-9a-f]{64})\.json$/;
 
@@ -141,52 +139,6 @@ function readBounded(path: string): Buffer {
   return readPrivateRegularFile(path, COMMUNITY_FILE_OPTIONS);
 }
 
-function mutationLockPath(configDir?: string): string {
-  return join(labCommunityDir(configDir), COMMUNITY_MUTATION_LOCK_NAME);
-}
-
-function withCommunityMutationLock<T>(configDir: string | undefined, run: () => T): T {
-  ensureLabDirs(configDir);
-  const lockPath = mutationLockPath(configDir);
-  const deadline = Date.now() + COMMUNITY_MUTATION_LOCK_TIMEOUT_MS;
-  const waiter = new Int32Array(new SharedArrayBuffer(4));
-
-  while (true) {
-    try {
-      mkdirSync(lockPath, { mode: 0o700 });
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const stat = lstatSync(lockPath);
-        if (!stat.isDirectory()) {
-          throw new PublicEvidenceValidationError(
-            "community_cache_lock",
-            "community cache mutation lock is not a directory",
-          );
-        }
-        if (Date.now() - stat.mtimeMs > COMMUNITY_MUTATION_LOCK_STALE_MS) {
-          rmSync(lockPath, { recursive: true, force: true });
-          continue;
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw statError;
-      }
-      if (Date.now() >= deadline) {
-        throw new PublicEvidenceValidationError("community_cache_busy", "community cache is busy");
-      }
-      Atomics.wait(waiter, 0, 0, COMMUNITY_MUTATION_LOCK_POLL_MS);
-    }
-  }
-
-  try {
-    return run();
-  } finally {
-    rmSync(lockPath, { recursive: true, force: true });
-  }
-}
-
 function cacheUsage(configDir?: string): { names: string[]; bytes: number } {
   ensureLabDirs(configDir);
   const dir = labCommunityDir(configDir);
@@ -214,7 +166,7 @@ function assertCacheCanAdd(byteCount: number, configDir?: string): void {
   }
 }
 
-function persistAt(
+function persistAtLocked(
   path: string,
   kind: "bundle" | "revocation",
   value: unknown,
@@ -226,41 +178,52 @@ function persistAt(
     throw new PublicEvidenceValidationError("community_size", "community object exceeds bound");
   }
 
-  return withCommunityMutationLock(configDir, () => {
-    let created = false;
+  let created = false;
+  try {
     try {
-      try {
-        const existing = readBounded(path);
-        if (!existing.equals(bytes)) {
+      const existing = readBounded(path);
+      if (!existing.equals(bytes)) {
+        throw new PublicEvidenceValidationError("community_conflict", `${kind} identity already exists with different bytes`);
+      }
+    } catch (error) {
+      if (error instanceof PublicEvidenceValidationError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      assertCacheCanAdd(bytes.byteLength, configDir);
+      const published = publishPrivateFileExclusive(path, bytes);
+      if (!published.created) {
+        const raced = readBounded(path);
+        if (!raced.equals(bytes)) {
           throw new PublicEvidenceValidationError("community_conflict", `${kind} identity already exists with different bytes`);
         }
-      } catch (error) {
-        if (error instanceof PublicEvidenceValidationError) throw error;
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        assertCacheCanAdd(bytes.byteLength, configDir);
-        const published = publishPrivateFileExclusive(path, bytes);
-        if (!published.created) {
-          const raced = readBounded(path);
-          if (!raced.equals(bytes)) {
-            throw new PublicEvidenceValidationError("community_conflict", `${kind} identity already exists with different bytes`);
-          }
-        } else {
-          created = true;
-          cacheUsage(configDir);
-        }
+      } else {
+        created = true;
+        cacheUsage(configDir);
       }
-
-      onCommit?.();
-      if (created) communitySummaryCache = null;
-      return { path, created };
-    } catch (error) {
-      if (created) {
-        try { unlinkSync(path); } catch { /* preserve commit error */ }
-        communitySummaryCache = null;
-      }
-      throw error;
     }
-  });
+
+    onCommit?.();
+    if (created) communitySummaryCache = null;
+    return { path, created };
+  } catch (error) {
+    if (created) {
+      try { unlinkSync(path); } catch { /* preserve commit error */ }
+      communitySummaryCache = null;
+    }
+    throw error;
+  }
+}
+
+function persistAt(
+  path: string,
+  kind: "bundle" | "revocation",
+  value: unknown,
+  configDir?: string,
+  onCommit?: () => void,
+): { path: string; created: boolean } {
+  return withPublicEvidenceMutationLock(
+    configDir,
+    () => persistAtLocked(path, kind, value, configDir, onCommit),
+  );
 }
 
 function readJson(path: string): unknown {
@@ -271,10 +234,6 @@ function readJson(path: string): unknown {
 
 function files(configDir?: string): string[] {
   return cacheUsage(configDir).names;
-}
-
-function committedFiles(configDir?: string): string[] {
-  return withCommunityMutationLock(configDir, () => files(configDir));
 }
 
 function readVerifiedBundleAt(path: string): PublicEvidenceBundleV1 {
@@ -329,7 +288,7 @@ export function importCommunityEvidenceBundle(
   return { ...stored, status: "cryptographically_valid", bundleId: bundle.bundleId, publisherKeyId: bundle.publisher.keyId };
 }
 
-export function readCommunityEvidenceBundleForPublisher(
+function readCommunityEvidenceBundleForPublisherLocked(
   bundleId: string,
   publisherKeyId: string,
   configDir?: string,
@@ -339,6 +298,17 @@ export function readCommunityEvidenceBundleForPublisher(
     throw new PublicEvidenceValidationError("community_identity_mismatch", "stored community bundle does not match filename identity");
   }
   return bundle;
+}
+
+export function readCommunityEvidenceBundleForPublisher(
+  bundleId: string,
+  publisherKeyId: string,
+  configDir?: string,
+): PublicEvidenceBundleV1 {
+  return withPublicEvidenceMutationLock(
+    configDir,
+    () => readCommunityEvidenceBundleForPublisherLocked(bundleId, publisherKeyId, configDir),
+  );
 }
 
 type RevocationMetadata = {
@@ -385,15 +355,15 @@ function resolveTargetBundle(
   return fullyMatching[0]!;
 }
 
-function findTargetBundle(revocation: unknown, configDir?: string): PublicEvidenceBundleV1 {
-  const names = committedFiles(configDir);
+function findTargetBundleLocked(revocation: unknown, configDir?: string): PublicEvidenceBundleV1 {
+  const names = files(configDir);
   const raw = revocation as RevocationMetadata;
   const publisherKeyId = typeof raw?.publisher?.keyId === "string" ? assertId(raw.publisher.keyId) : null;
   const directBundleIds = Array.isArray(raw?.targets)
     ? [...new Set(raw.targets.filter((target) => target.kind === "bundle" && typeof target.id === "string").map((target) => target.id as string))]
     : [];
   if (publisherKeyId && directBundleIds.length === 1) {
-    return readCommunityEvidenceBundleForPublisher(assertId(directBundleIds[0]!), publisherKeyId, configDir);
+    return readCommunityEvidenceBundleForPublisherLocked(assertId(directBundleIds[0]!), publisherKeyId, configDir);
   }
   return resolveTargetBundle(revocation, bundlesFromNames(names, configDir));
 }
@@ -403,19 +373,21 @@ export function importCommunityEvidenceRevocation(
   configDir?: string,
 ): { created: boolean; status: "cryptographically_valid"; revocationId: string; path: string } {
   const parsed = boundedInput(raw);
-  const targetBundle = findTargetBundle(parsed, configDir);
-  const verified = verifyPublicEvidenceRevocation(parsed, targetBundle);
-  if (verified.status !== "cryptographically_valid") {
-    throw new PublicEvidenceValidationError(verified.status, verified.detail ?? "community revocation verification failed");
-  }
   ensureLabDirs(configDir);
-  const stored = persistAt(
-    revocationObjectPath(verified.revocation.revocationId, configDir),
-    "revocation",
-    verified.revocation,
-    configDir,
-  );
-  return { ...stored, status: "cryptographically_valid", revocationId: verified.revocation.revocationId };
+  return withPublicEvidenceMutationLock(configDir, () => {
+    const targetBundle = findTargetBundleLocked(parsed, configDir);
+    const verified = verifyPublicEvidenceRevocation(parsed, targetBundle);
+    if (verified.status !== "cryptographically_valid") {
+      throw new PublicEvidenceValidationError(verified.status, verified.detail ?? "community revocation verification failed");
+    }
+    const stored = persistAtLocked(
+      revocationObjectPath(verified.revocation.revocationId, configDir),
+      "revocation",
+      verified.revocation,
+      configDir,
+    );
+    return { ...stored, status: "cryptographically_valid", revocationId: verified.revocation.revocationId };
+  });
 }
 
 function communityFingerprint(names: readonly string[], configDir?: string): string {
@@ -430,8 +402,8 @@ function copySummaries(evidence: readonly CommunityEvidenceSummaryV1[]): Communi
   return evidence.map((row) => ({ ...row }));
 }
 
-export function listCommunityEvidence(configDir?: string): CommunityEvidenceSummaryV1[] {
-  const names = committedFiles(configDir);
+function listCommunityEvidenceLocked(configDir?: string): CommunityEvidenceSummaryV1[] {
+  const names = files(configDir);
   const directory = labCommunityDir(configDir);
   const fingerprint = communityFingerprint(names, configDir);
   if (communitySummaryCache?.directory === directory && communitySummaryCache.fingerprint === fingerprint) {
@@ -482,4 +454,8 @@ export function listCommunityEvidence(configDir?: string): CommunityEvidenceSumm
 
   communitySummaryCache = { directory, fingerprint, evidence: copySummaries(evidence) };
   return copySummaries(evidence);
+}
+
+export function listCommunityEvidence(configDir?: string): CommunityEvidenceSummaryV1[] {
+  return withPublicEvidenceMutationLock(configDir, () => listCommunityEvidenceLocked(configDir));
 }
