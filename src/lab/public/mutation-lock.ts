@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
+  readdirSync,
   renameSync,
   rmSync,
   unlinkSync,
@@ -18,6 +19,7 @@ const PUBLIC_EVIDENCE_MUTATION_LOCK_RECLAIM = ".reclaim.json";
 const PUBLIC_EVIDENCE_MUTATION_LOCK_TIMEOUT_MS = 5_000;
 const PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_EVIDENCE_MUTATION_LOCK_POLL_MS = 10;
+const DETACHED_MUTATION_LOCK_RE = /^\.mutation-lock-(?:stale|release)-\d+-[0-9a-f-]{36}$/;
 const MUTATION_LOCK_META_FILE_OPTIONS = {
   maxBytes: 1024,
   errorCode: "community_cache_lock",
@@ -142,6 +144,17 @@ function unlinkIfPresent(path: string): void {
     unlinkSync(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function cleanupDetachedMutationLocks(lockPath: string): void {
+  const dir = dirname(lockPath);
+  for (const name of readdirSync(dir)) {
+    if (!DETACHED_MUTATION_LOCK_RE.test(name)) continue;
+    // Detached lock directories are no longer authoritative once a new canonical
+    // lock has been acquired. Removing only their UUID-scoped names prevents them
+    // from leaking storage or being mistaken for community cache objects.
+    rmSync(join(dir, name), { recursive: true, force: true });
   }
 }
 
@@ -289,6 +302,24 @@ function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
   }
 }
 
+function discardUncommittedMutationLock(
+  lockPath: string,
+  expectedDirectory: MutationLockDirectoryIdentity,
+): void {
+  try {
+    if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), expectedDirectory)) return;
+    const quarantinePath = join(
+      dirname(lockPath),
+      `.mutation-lock-release-${process.pid}-${randomUUID()}`,
+    );
+    renameSync(lockPath, quarantinePath);
+    rmSync(quarantinePath, { recursive: true, force: true });
+  } catch {
+    // Preserve the owner-publication error. An unrecoverable cleanup witness stays
+    // ownerless and can be reclaimed by the long incomplete-acquisition fallback.
+  }
+}
+
 function releaseMutationLock(
   lockPath: string,
   owner: MutationLockOwner,
@@ -354,13 +385,19 @@ export function withPublicEvidenceMutationLock<T>(
       token: randomUUID(),
       createdAt: Date.now(),
     };
-    publishMutationLockOwner(lockPath, candidate, directory);
+    try {
+      publishMutationLockOwner(lockPath, candidate, directory);
+    } catch (error) {
+      discardUncommittedMutationLock(lockPath, directory);
+      throw error;
+    }
     owner = candidate;
     ownedDirectory = directory;
     break;
   }
 
   try {
+    cleanupDetachedMutationLocks(lockPath);
     return run();
   } finally {
     if (owner && ownedDirectory) releaseMutationLock(lockPath, owner, ownedDirectory);
