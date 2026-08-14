@@ -28,6 +28,7 @@ import { listValidPublicOriginsForPurge } from "./origin-purge";
 import { publicEvidencePurgeFaultForTests } from "./purge-test-fault";
 import { readPublicEvidenceBundle } from "./storage";
 import { parseStrictPublicJson } from "./strict-json";
+import { PublicEvidenceValidationError } from "./validate";
 
 const MAX_PRIVATE_KEY_BYTES = 8 * 1024;
 const MAX_COMMUNITY_OBJECT_BYTES = 2 * 1024 * 1024;
@@ -112,13 +113,21 @@ function purgeAllExports(configDir?: string): number {
   return deleted;
 }
 
-/** A locally-originated community copy is part of the mandatory export purge. */
+/** Unsafe community cache entries are optional cleanup and must not invalidate export deletion. */
 function unlinkLocalCommunityFile(path: string): boolean {
-  privateRegularFileSize(path, {
-    maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
-    errorCode: "community_unsafe_target",
-    errorMessage: "community object is unsafe during purge",
-  });
+  try {
+    privateRegularFileSize(path, {
+      maxBytes: MAX_COMMUNITY_OBJECT_BYTES,
+      errorCode: "community_unsafe_target",
+      errorMessage: "community object is unsafe during purge",
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (error instanceof PublicEvidenceValidationError && error.code === "community_unsafe_target") {
+      return false;
+    }
+    throw error;
+  }
   try {
     unlinkSync(path);
     return true;
