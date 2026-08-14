@@ -1,22 +1,29 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  lstatSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import { ensureLabDirs, labCommunityDir } from "../paths";
 import { readPrivateRegularFile } from "./file-safety";
 import { PublicEvidenceValidationError } from "./validate";
 
 const PUBLIC_EVIDENCE_MUTATION_LOCK_NAME = ".mutation-lock";
 const PUBLIC_EVIDENCE_MUTATION_LOCK_OWNER = "owner.json";
+const PUBLIC_EVIDENCE_MUTATION_LOCK_RECLAIM = ".reclaim.json";
 const PUBLIC_EVIDENCE_MUTATION_LOCK_TIMEOUT_MS = 5_000;
-const PUBLIC_EVIDENCE_MUTATION_LOCK_STALE_MS = 60_000;
-const PUBLIC_EVIDENCE_MUTATION_LOCK_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+const PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_EVIDENCE_MUTATION_LOCK_POLL_MS = 10;
-const MUTATION_LOCK_OWNER_FILE_OPTIONS = {
+const MUTATION_LOCK_META_FILE_OPTIONS = {
   maxBytes: 1024,
   errorCode: "community_cache_lock",
-  errorMessage: "community cache mutation lock owner is unsafe",
+  errorMessage: "community cache mutation lock metadata is unsafe",
   sizeErrorCode: "community_cache_lock",
-  sizeErrorMessage: "community cache mutation lock owner exceeds its size bound",
+  sizeErrorMessage: "community cache mutation lock metadata exceeds its size bound",
   requireMode600: true,
 } as const;
 
@@ -26,12 +33,27 @@ type MutationLockOwner = {
   createdAt: number;
 };
 
+type MutationLockReclaim = {
+  pid: number;
+  token: string;
+  createdAt: number;
+};
+
+type MutationLockDirectoryIdentity = {
+  dev: number;
+  ino: number;
+};
+
 function mutationLockPath(configDir?: string): string {
   return join(labCommunityDir(configDir), PUBLIC_EVIDENCE_MUTATION_LOCK_NAME);
 }
 
 function mutationLockOwnerPath(lockPath: string): string {
   return join(lockPath, PUBLIC_EVIDENCE_MUTATION_LOCK_OWNER);
+}
+
+function mutationLockReclaimPath(lockPath: string): string {
+  return join(lockPath, PUBLIC_EVIDENCE_MUTATION_LOCK_RECLAIM);
 }
 
 function pidDefinitelyDead(pid: number): boolean {
@@ -43,13 +65,12 @@ function pidDefinitelyDead(pid: number): boolean {
   }
 }
 
-function readMutationLockOwner(lockPath: string): MutationLockOwner | null {
+function readLockMetadata<T extends MutationLockOwner | MutationLockReclaim>(
+  path: string,
+): T | null {
   try {
-    const bytes = readPrivateRegularFile(
-      mutationLockOwnerPath(lockPath),
-      MUTATION_LOCK_OWNER_FILE_OPTIONS,
-    );
-    const raw = JSON.parse(bytes.toString("utf8")) as Partial<MutationLockOwner>;
+    const bytes = readPrivateRegularFile(path, MUTATION_LOCK_META_FILE_OPTIONS);
+    const raw = JSON.parse(bytes.toString("utf8")) as Partial<T>;
     if (
       Number.isSafeInteger(raw.pid)
       && Number(raw.pid) > 0
@@ -58,13 +79,25 @@ function readMutationLockOwner(lockPath: string): MutationLockOwner | null {
       && Number.isSafeInteger(raw.createdAt)
       && Number(raw.createdAt) > 0
     ) {
-      return { pid: Number(raw.pid), token: raw.token, createdAt: Number(raw.createdAt) };
+      return {
+        pid: Number(raw.pid),
+        token: raw.token,
+        createdAt: Number(raw.createdAt),
+      } as T;
     }
   } catch {
-    // A writer can die after mkdir and before owner publication. The directory
-    // age fallback below recovers that incomplete acquisition after the stale bound.
+    // Incomplete metadata is handled conservatively by the age fallback where
+    // applicable. Normal acquisition never trusts malformed metadata.
   }
   return null;
+}
+
+function readMutationLockOwner(lockPath: string): MutationLockOwner | null {
+  return readLockMetadata<MutationLockOwner>(mutationLockOwnerPath(lockPath));
+}
+
+function readMutationLockReclaim(lockPath: string): MutationLockReclaim | null {
+  return readLockMetadata<MutationLockReclaim>(mutationLockReclaimPath(lockPath));
 }
 
 function assertMutationLockDirectory(lockPath: string) {
@@ -78,40 +111,208 @@ function assertMutationLockDirectory(lockPath: string) {
   return stat;
 }
 
+function sameDirectoryIdentity(
+  left: MutationLockDirectoryIdentity,
+  right: MutationLockDirectoryIdentity,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function currentDirectoryIdentity(lockPath: string): MutationLockDirectoryIdentity {
+  const stat = assertMutationLockDirectory(lockPath);
+  return { dev: stat.dev, ino: stat.ino };
+}
+
 function mutationLockIsReclaimable(lockPath: string, nowMs: number): boolean {
   const stat = assertMutationLockDirectory(lockPath);
   const owner = readMutationLockOwner(lockPath);
   if (owner) {
-    // Short age alone must never evict a live owner. The hard lifetime exists only
-    // to recover from PID reuse after the real owner died, which would otherwise
-    // make process.kill(pid, 0) report an unrelated process as the owner forever.
-    return pidDefinitelyDead(owner.pid)
-      || nowMs - owner.createdAt > PUBLIC_EVIDENCE_MUTATION_LOCK_MAX_LIFETIME_MS;
+    // Never evict a recorded live owner based on age alone. Long operations or a
+    // suspended process must retain mutual exclusion until that process exits.
+    return pidDefinitelyDead(owner.pid);
   }
-  return nowMs - stat.mtimeMs > PUBLIC_EVIDENCE_MUTATION_LOCK_STALE_MS;
+  // The only ownerless state is the tiny mkdir-to-owner publication window. Use
+  // a deliberately long fallback so a crashed acquisition can eventually heal
+  // without treating an ordinary pause as proof that the owner disappeared.
+  return nowMs - stat.mtimeMs > PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS;
 }
 
-function publishMutationLockOwner(lockPath: string, owner: MutationLockOwner): void {
+function unlinkIfPresent(path: string): void {
   try {
-    writeFileSync(
-      mutationLockOwnerPath(lockPath),
-      JSON.stringify(owner),
-      { encoding: "utf8", flag: "wx", mode: 0o600 },
-    );
+    unlinkSync(path);
   } catch (error) {
-    try { rmSync(lockPath, { recursive: true, force: true }); } catch { /* preserve owner-write failure */ }
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+function publishMutationLockOwner(
+  lockPath: string,
+  owner: MutationLockOwner,
+  expectedDirectory: MutationLockDirectoryIdentity,
+): void {
+  // Write through a unique temporary pathname first. If an ancient ownerless
+  // lock is reclaimed while this process was suspended, the inode check prevents
+  // this acquisition from publishing its owner metadata into a replacement lock.
+  const tempPath = join(lockPath, `.owner-${owner.token}.tmp`);
+  try {
+    writeFileSync(tempPath, JSON.stringify(owner), {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), expectedDirectory)) {
+      throw new PublicEvidenceValidationError(
+        "community_cache_lock",
+        "community cache mutation lock changed during owner publication",
+      );
+    }
+    renameSync(tempPath, mutationLockOwnerPath(lockPath));
+    if (!sameDirectoryIdentity(currentDirectoryIdentity(lockPath), expectedDirectory)) {
+      throw new PublicEvidenceValidationError(
+        "community_cache_lock",
+        "community cache mutation lock changed after owner publication",
+      );
+    }
+    const persisted = readMutationLockOwner(lockPath);
+    if (!persisted || persisted.pid !== owner.pid || persisted.token !== owner.token) {
+      throw new PublicEvidenceValidationError(
+        "community_cache_lock",
+        "community cache mutation lock owner publication was not durable",
+      );
+    }
+  } finally {
+    // The rename normally makes this ENOENT. If the lock pathname was replaced,
+    // the UUID-scoped temporary name can be removed without touching successor state.
+    unlinkIfPresent(tempPath);
+  }
+}
+
+function reclaimClaimIsRecoverable(lockPath: string, nowMs: number): boolean {
+  const claimPath = mutationLockReclaimPath(lockPath);
+  const claim = readMutationLockReclaim(lockPath);
+  if (claim) return pidDefinitelyDead(claim.pid);
+  try {
+    const stat = lstatSync(claimPath);
+    return nowMs - stat.mtimeMs > PUBLIC_EVIDENCE_MUTATION_LOCK_INCOMPLETE_STALE_MS;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
     throw error;
   }
 }
 
-function releaseMutationLock(lockPath: string, owner: MutationLockOwner): void {
+function recoverStaleReclaimClaim(lockPath: string, nowMs: number): boolean {
+  if (!reclaimClaimIsRecoverable(lockPath, nowMs)) return false;
+  const claimPath = mutationLockReclaimPath(lockPath);
+  const quarantinePath = join(lockPath, `.reclaim-stale-${randomUUID()}.json`);
+  try {
+    renameSync(claimPath, quarantinePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  unlinkIfPresent(quarantinePath);
+  return true;
+}
+
+function tryAcquireReclaimClaim(
+  lockPath: string,
+  nowMs: number,
+): MutationLockReclaim | null {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const claim: MutationLockReclaim = {
+      pid: process.pid,
+      token: randomUUID(),
+      createdAt: nowMs,
+    };
+    try {
+      writeFileSync(mutationLockReclaimPath(lockPath), JSON.stringify(claim), {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      return claim;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return null;
+      if (code !== "EEXIST") throw error;
+      if (!recoverStaleReclaimClaim(lockPath, nowMs)) return null;
+    }
+  }
+  return null;
+}
+
+function reclaimClaimStillOwned(lockPath: string, claim: MutationLockReclaim): boolean {
+  const current = readMutationLockReclaim(lockPath);
+  return current?.pid === claim.pid && current.token === claim.token;
+}
+
+function releaseReclaimClaim(lockPath: string, claim: MutationLockReclaim): void {
+  if (!reclaimClaimStillOwned(lockPath, claim)) return;
+  unlinkIfPresent(mutationLockReclaimPath(lockPath));
+}
+
+function tryReclaimMutationLock(lockPath: string, nowMs: number): boolean {
+  // The first check avoids creating claim files on every healthy contention.
+  // The authoritative stale decision happens again only after this process owns
+  // the exclusive reclaim claim.
+  if (!mutationLockIsReclaimable(lockPath, nowMs)) return false;
+  const claim = tryAcquireReclaimClaim(lockPath, nowMs);
+  if (!claim) return false;
+
+  let moved = false;
+  try {
+    if (!reclaimClaimStillOwned(lockPath, claim)) return false;
+    if (!mutationLockIsReclaimable(lockPath, Date.now())) return false;
+    if (!reclaimClaimStillOwned(lockPath, claim)) return false;
+
+    const quarantinePath = join(
+      dirname(lockPath),
+      `.mutation-lock-stale-${process.pid}-${randomUUID()}`,
+    );
+    try {
+      // Rename the exact claimed directory away from the canonical pathname before
+      // deleting it. A successor can create a new lock immediately afterwards, but
+      // cleanup is confined to this unique quarantine path and cannot delete it.
+      renameSync(lockPath, quarantinePath);
+      moved = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+    rmSync(quarantinePath, { recursive: true, force: true });
+    return true;
+  } finally {
+    if (!moved) releaseReclaimClaim(lockPath, claim);
+  }
+}
+
+function releaseMutationLock(
+  lockPath: string,
+  owner: MutationLockOwner,
+  expectedDirectory: MutationLockDirectoryIdentity,
+): void {
+  let currentDirectory: MutationLockDirectoryIdentity;
+  try {
+    currentDirectory = currentDirectoryIdentity(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
+  }
+  if (!sameDirectoryIdentity(currentDirectory, expectedDirectory)) return;
   const current = readMutationLockOwner(lockPath);
   if (!current || current.pid !== owner.pid || current.token !== owner.token) return;
+
+  const quarantinePath = join(
+    dirname(lockPath),
+    `.mutation-lock-release-${process.pid}-${randomUUID()}`,
+  );
   try {
-    rmSync(lockPath, { recursive: true, force: true });
+    renameSync(lockPath, quarantinePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw error;
   }
+  rmSync(quarantinePath, { recursive: true, force: true });
 }
 
 /** Serialize public-evidence mutations across CLI/server processes with ownership-safe stale recovery. */
@@ -124,35 +325,42 @@ export function withPublicEvidenceMutationLock<T>(
   const deadline = Date.now() + PUBLIC_EVIDENCE_MUTATION_LOCK_TIMEOUT_MS;
   const waiter = new Int32Array(new SharedArrayBuffer(4));
   let owner: MutationLockOwner | null = null;
+  let ownedDirectory: MutationLockDirectoryIdentity | null = null;
 
   while (true) {
     try {
       mkdirSync(lockPath, { mode: 0o700 });
-      owner = { pid: process.pid, token: randomUUID(), createdAt: Date.now() };
-      publishMutationLockOwner(lockPath, owner);
-      break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
-        if (mutationLockIsReclaimable(lockPath, Date.now())) {
-          rmSync(lockPath, { recursive: true, force: true });
-          continue;
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw statError;
+        if (tryReclaimMutationLock(lockPath, Date.now())) continue;
+      } catch (reclaimError) {
+        if ((reclaimError as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw reclaimError;
       }
       if (Date.now() >= deadline) {
         throw new PublicEvidenceValidationError("community_cache_busy", "community cache is busy");
       }
       Atomics.wait(waiter, 0, 0, PUBLIC_EVIDENCE_MUTATION_LOCK_POLL_MS);
+      continue;
     }
+
+    const directory = currentDirectoryIdentity(lockPath);
+    const candidate: MutationLockOwner = {
+      pid: process.pid,
+      token: randomUUID(),
+      createdAt: Date.now(),
+    };
+    publishMutationLockOwner(lockPath, candidate, directory);
+    owner = candidate;
+    ownedDirectory = directory;
+    break;
   }
 
   try {
     return run();
   } finally {
-    if (owner) releaseMutationLock(lockPath, owner);
+    if (owner && ownedDirectory) releaseMutationLock(lockPath, owner, ownedDirectory);
   }
 }
 
@@ -162,4 +370,12 @@ export function publicEvidenceMutationLockIsReclaimableForTests(
   nowMs = Date.now(),
 ): boolean {
   return mutationLockIsReclaimable(mutationLockPath(configDir), nowMs);
+}
+
+/** Test-only seam for the exclusive stale-reclaimer claim. */
+export function publicEvidenceTryReclaimMutationLockForTests(
+  configDir: string | undefined,
+  nowMs = Date.now(),
+): boolean {
+  return tryReclaimMutationLock(mutationLockPath(configDir), nowMs);
 }
