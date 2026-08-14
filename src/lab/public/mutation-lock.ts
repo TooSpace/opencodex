@@ -1,14 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ensureLabDirs, labCommunityDir } from "../paths";
+import { readPrivateRegularFile } from "./file-safety";
 import { PublicEvidenceValidationError } from "./validate";
 
 const PUBLIC_EVIDENCE_MUTATION_LOCK_NAME = ".mutation-lock";
 const PUBLIC_EVIDENCE_MUTATION_LOCK_OWNER = "owner.json";
 const PUBLIC_EVIDENCE_MUTATION_LOCK_TIMEOUT_MS = 5_000;
 const PUBLIC_EVIDENCE_MUTATION_LOCK_STALE_MS = 60_000;
+const PUBLIC_EVIDENCE_MUTATION_LOCK_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_EVIDENCE_MUTATION_LOCK_POLL_MS = 10;
+const MUTATION_LOCK_OWNER_FILE_OPTIONS = {
+  maxBytes: 1024,
+  errorCode: "community_cache_lock",
+  errorMessage: "community cache mutation lock owner is unsafe",
+  sizeErrorCode: "community_cache_lock",
+  sizeErrorMessage: "community cache mutation lock owner exceeds its size bound",
+  requireMode600: true,
+} as const;
 
 type MutationLockOwner = {
   pid: number;
@@ -35,7 +45,11 @@ function pidDefinitelyDead(pid: number): boolean {
 
 function readMutationLockOwner(lockPath: string): MutationLockOwner | null {
   try {
-    const raw = JSON.parse(readFileSync(mutationLockOwnerPath(lockPath), "utf8")) as Partial<MutationLockOwner>;
+    const bytes = readPrivateRegularFile(
+      mutationLockOwnerPath(lockPath),
+      MUTATION_LOCK_OWNER_FILE_OPTIONS,
+    );
+    const raw = JSON.parse(bytes.toString("utf8")) as Partial<MutationLockOwner>;
     if (
       Number.isSafeInteger(raw.pid)
       && Number(raw.pid) > 0
@@ -68,9 +82,11 @@ function mutationLockIsReclaimable(lockPath: string, nowMs: number): boolean {
   const stat = assertMutationLockDirectory(lockPath);
   const owner = readMutationLockOwner(lockPath);
   if (owner) {
-    // Age alone must never evict a live owner. A full cache verification or slow
-    // filesystem can legitimately exceed the stale-age fallback.
-    return pidDefinitelyDead(owner.pid);
+    // Short age alone must never evict a live owner. The hard lifetime exists only
+    // to recover from PID reuse after the real owner died, which would otherwise
+    // make process.kill(pid, 0) report an unrelated process as the owner forever.
+    return pidDefinitelyDead(owner.pid)
+      || nowMs - owner.createdAt > PUBLIC_EVIDENCE_MUTATION_LOCK_MAX_LIFETIME_MS;
   }
   return nowMs - stat.mtimeMs > PUBLIC_EVIDENCE_MUTATION_LOCK_STALE_MS;
 }
