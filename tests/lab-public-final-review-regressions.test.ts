@@ -99,16 +99,16 @@ test("purge provenance salvage does not truncate valid markers at the operationa
   expect(listValidPublicOriginsForPurge(home)).toHaveLength(1025);
 });
 
-test("successful local export reasserts provenance after export storage", () => {
+test("successful local export commits provenance before export storage", () => {
   const source = readFileSync(new URL("../src/lab/public/operator.ts", import.meta.url), "utf8");
   const start = source.indexOf("export function exportLocalPublicEvidence");
   const end = source.indexOf("export function summarizePublicEvidenceVerification", start);
   const block = source.slice(start, end);
+  const origin = block.indexOf("recordLocalPublicOrigin");
   const stored = block.indexOf("const stored = storePublicEvidenceBundle");
-  const postStoreOrigin = block.indexOf("recordLocalPublicOrigin", stored + 1);
 
-  expect(stored).toBeGreaterThanOrEqual(0);
-  expect(postStoreOrigin).toBeGreaterThan(stored);
+  expect(origin).toBeGreaterThanOrEqual(0);
+  expect(stored).toBeGreaterThan(origin);
 });
 
 test("V1 revocation rejects targets that span multiple bundle anchors", () => {
