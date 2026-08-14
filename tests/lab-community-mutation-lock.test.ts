@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureLabDirs, labCommunityDir } from "../src/lab/paths";
 import { listCommunityEvidence } from "../src/lab/public/community";
-import { publicEvidenceMutationLockIsReclaimableForTests } from "../src/lab/public/mutation-lock";
+import {
+  publicEvidenceMutationLockIsReclaimableForTests,
+  publicEvidenceTryReclaimMutationLockForTests,
+} from "../src/lab/public/mutation-lock";
 
 const roots: string[] = [];
 
@@ -20,11 +23,11 @@ function configDir(): string {
 }
 
 describe("community mutation lock", () => {
-  test("recovers a stale incomplete lock before reading committed cache state", () => {
+  test("recovers an ancient incomplete lock before reading committed cache state", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
     mkdirSync(lockPath, { mode: 0o700 });
-    const stale = new Date(Date.now() - 120_000);
+    const stale = new Date(Date.now() - (25 * 60 * 60 * 1000));
     utimesSync(lockPath, stale, stale);
 
     expect(listCommunityEvidence(config)).toEqual([]);
@@ -40,33 +43,29 @@ describe("community mutation lock", () => {
       JSON.stringify({
         pid: process.pid,
         token: "00000000-0000-4000-8000-000000000000",
-        createdAt: Date.now() - 120_000,
+        createdAt: Date.now() - (25 * 60 * 60 * 1000),
       }),
       { encoding: "utf8", mode: 0o600 },
     );
-    const stale = new Date(Date.now() - 120_000);
-    utimesSync(lockPath, stale, stale);
 
     expect(publicEvidenceMutationLockIsReclaimableForTests(config)).toBe(false);
     expect(existsSync(lockPath)).toBe(true);
   });
 
-  test("eventually reclaims an ancient owner record even when its pid has been reused", () => {
+  test("a competing reclaim claim prevents a second stale reclaimer from deleting the lock", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
     mkdirSync(lockPath, { mode: 0o700 });
-    const ancient = Date.now() - (25 * 60 * 60 * 1000);
+    const stale = new Date(Date.now() - (25 * 60 * 60 * 1000));
+    utimesSync(lockPath, stale, stale);
     writeFileSync(
-      join(lockPath, "owner.json"),
-      JSON.stringify({
-        pid: process.pid,
-        token: "00000000-0000-4000-8000-000000000000",
-        createdAt: ancient,
-      }),
+      join(lockPath, ".reclaim.json"),
+      JSON.stringify({ token: "00000000-0000-4000-8000-000000000000" }),
       { encoding: "utf8", mode: 0o600 },
     );
 
-    expect(publicEvidenceMutationLockIsReclaimableForTests(config)).toBe(true);
+    expect(publicEvidenceTryReclaimMutationLockForTests(config)).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
   });
 
   test("fails closed when the lock path is not a directory", () => {
