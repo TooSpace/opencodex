@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureLabDirs, labCommunityDir } from "../src/lab/paths";
 import { listCommunityEvidence } from "../src/lab/public/community";
+import { publicEvidenceMutationLockIsReclaimableForTests } from "../src/lab/public/mutation-lock";
 
 const roots: string[] = [];
 
@@ -19,7 +20,7 @@ function configDir(): string {
 }
 
 describe("community mutation lock", () => {
-  test("recovers a stale lock before reading committed cache state", () => {
+  test("recovers a stale incomplete lock before reading committed cache state", () => {
     const config = configDir();
     const lockPath = join(labCommunityDir(config), ".mutation-lock");
     mkdirSync(lockPath, { mode: 0o700 });
@@ -28,6 +29,26 @@ describe("community mutation lock", () => {
 
     expect(listCommunityEvidence(config)).toEqual([]);
     expect(existsSync(lockPath)).toBe(false);
+  });
+
+  test("does not reclaim an old lock while its recorded owner process is alive", () => {
+    const config = configDir();
+    const lockPath = join(labCommunityDir(config), ".mutation-lock");
+    mkdirSync(lockPath, { mode: 0o700 });
+    writeFileSync(
+      join(lockPath, "owner.json"),
+      JSON.stringify({
+        pid: process.pid,
+        token: "00000000-0000-4000-8000-000000000000",
+        createdAt: Date.now() - 120_000,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    const stale = new Date(Date.now() - 120_000);
+    utimesSync(lockPath, stale, stale);
+
+    expect(publicEvidenceMutationLockIsReclaimableForTests(config)).toBe(false);
+    expect(existsSync(lockPath)).toBe(true);
   });
 
   test("fails closed when the lock path is not a directory", () => {
