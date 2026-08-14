@@ -1,6 +1,6 @@
 import { replayLabLedger } from "../ledger/store";
 import { labLedgerPath } from "../paths";
-import { queryLabEventById, queryLabVerdicts } from "../query";
+import { queryLabEvents, queryLabVerdicts } from "../query";
 import type { ObservationEvent } from "../events/types";
 import {
   importCommunityEvidenceBundle,
@@ -120,6 +120,28 @@ function assertOperatorEventIds(eventIds: readonly string[]): Array<{ eventId: s
   return unique;
 }
 
+function projectedObservationState(
+  eventIds: readonly string[],
+  configDir?: string,
+): Map<string, { excluded: boolean }> {
+  const pending = new Set(eventIds);
+  const state = new Map<string, { excluded: boolean }>();
+  let cursor: string | undefined;
+
+  while (pending.size > 0) {
+    const page = queryLabEvents({ eventKind: "observation" }, cursor, 200, configDir);
+    for (const row of page.items) {
+      if (!pending.has(row.eventId)) continue;
+      state.set(row.eventId, { excluded: row.excluded });
+      pending.delete(row.eventId);
+    }
+    if (!page.hasMore || !page.nextCursor) break;
+    cursor = page.nextCursor;
+  }
+
+  return state;
+}
+
 function canonicalVerdictsForObservations(
   observations: readonly ObservationEvent[],
   configDir?: string,
@@ -160,9 +182,8 @@ export function previewLocalPublicEvidence(
   const selections = assertOperatorEventIds(input.eventIds);
   const replay = replayLabLedger(labLedgerPath(configDir));
   const byId = new Map(replay.events.map((event) => [event.eventId, event] as const));
-  const candidates: Array<{ observation: ObservationEvent; selectionIndex: number }> = [];
+  const observationSelections: Array<{ observation: ObservationEvent; selectionIndex: number }> = [];
   const excluded: PublicOperatorExclusionV1[] = [];
-  let sawObservation = false;
 
   for (const { eventId, selectionIndex } of selections) {
     const event = byId.get(eventId);
@@ -174,21 +195,29 @@ export function previewLocalPublicEvidence(
       excluded.push({ selectionIndex, reason: "not_observation" });
       continue;
     }
-    sawObservation = true;
-    const projectedEvent = queryLabEventById(eventId, configDir);
+    observationSelections.push({ observation: event, selectionIndex });
+  }
+
+  if (observationSelections.length === 0) {
+    throw new PublicEvidenceValidationError("public_selection_empty", "public evidence selection contains no observation events");
+  }
+
+  const projectionByEventId = projectedObservationState(
+    observationSelections.map(({ observation }) => observation.eventId),
+    configDir,
+  );
+  const candidates: Array<{ observation: ObservationEvent; selectionIndex: number }> = [];
+  for (const candidate of observationSelections) {
+    const projectedEvent = projectionByEventId.get(candidate.observation.eventId);
     if (!projectedEvent) {
-      excluded.push({ selectionIndex, reason: "event_not_found" });
+      excluded.push({ selectionIndex: candidate.selectionIndex, reason: "event_not_found" });
       continue;
     }
     if (projectedEvent.excluded) {
-      excluded.push({ selectionIndex, reason: "event_excluded" });
+      excluded.push({ selectionIndex: candidate.selectionIndex, reason: "event_excluded" });
       continue;
     }
-    candidates.push({ observation: event, selectionIndex });
-  }
-
-  if (!sawObservation) {
-    throw new PublicEvidenceValidationError("public_selection_empty", "public evidence selection contains no observation events");
+    candidates.push(candidate);
   }
 
   const verdictByEventId = canonicalVerdictsForObservations(
