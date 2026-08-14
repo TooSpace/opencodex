@@ -120,25 +120,37 @@ function assertOperatorEventIds(eventIds: readonly string[]): Array<{ eventId: s
   return unique;
 }
 
-function canonicalVerdictForObservation(
-  observation: ObservationEvent,
+function canonicalVerdictsForObservations(
+  observations: readonly ObservationEvent[],
   configDir?: string,
-): ProjectPublicEvidenceRecordInput["verdict"] | null {
-  const filters = {
-    subjectId: observation.subjectId,
-    layer: observation.evidenceLayer,
-    suiteId: observation.suiteId,
-  };
+): Map<string, ProjectPublicEvidenceRecordInput["verdict"]> {
+  const pending = new Map(observations.map((observation) => [observation.eventId, observation] as const));
+  const verdictByEventId = new Map<string, ProjectPublicEvidenceRecordInput["verdict"]>();
   let cursor: string | undefined;
-  do {
-    const page = queryLabVerdicts(filters, cursor, 200, configDir);
-    const verdict = page.items.find((row) =>
-      row.suiteVersion === observation.suiteVersion && row.contributingEventIds.includes(observation.eventId),
-    );
-    if (verdict) return verdict.verdict;
-    if (!page.hasMore || !page.nextCursor) return null;
+
+  while (pending.size > 0) {
+    const page = queryLabVerdicts({}, cursor, 200, configDir);
+    for (const row of page.items) {
+      for (const eventId of row.contributingEventIds) {
+        const observation = pending.get(eventId);
+        if (!observation) continue;
+        if (
+          row.subjectId !== observation.subjectId
+          || row.evidenceLayer !== observation.evidenceLayer
+          || row.suiteId !== observation.suiteId
+          || row.suiteVersion !== observation.suiteVersion
+        ) {
+          continue;
+        }
+        verdictByEventId.set(eventId, row.verdict);
+        pending.delete(eventId);
+      }
+    }
+    if (!page.hasMore || !page.nextCursor) break;
     cursor = page.nextCursor;
-  } while (true);
+  }
+
+  return verdictByEventId;
 }
 
 export function previewLocalPublicEvidence(
@@ -148,8 +160,7 @@ export function previewLocalPublicEvidence(
   const selections = assertOperatorEventIds(input.eventIds);
   const replay = replayLabLedger(labLedgerPath(configDir));
   const byId = new Map(replay.events.map((event) => [event.eventId, event] as const));
-  const projectInputs: ProjectPublicEvidenceRecordInput[] = [];
-  const projectSelectionIndices: number[] = [];
+  const candidates: Array<{ observation: ObservationEvent; selectionIndex: number }> = [];
   const excluded: PublicOperatorExclusionV1[] = [];
   let sawObservation = false;
 
@@ -173,17 +184,27 @@ export function previewLocalPublicEvidence(
       excluded.push({ selectionIndex, reason: "event_excluded" });
       continue;
     }
-    const verdict = canonicalVerdictForObservation(event, configDir);
-    if (!verdict) {
-      excluded.push({ selectionIndex, reason: "no_canonical_verdict" });
-      continue;
-    }
-    projectInputs.push({ observation: event, verdict });
-    projectSelectionIndices.push(selectionIndex);
+    candidates.push({ observation: event, selectionIndex });
   }
 
   if (!sawObservation) {
     throw new PublicEvidenceValidationError("public_selection_empty", "public evidence selection contains no observation events");
+  }
+
+  const verdictByEventId = canonicalVerdictsForObservations(
+    candidates.map((candidate) => candidate.observation),
+    configDir,
+  );
+  const projectInputs: ProjectPublicEvidenceRecordInput[] = [];
+  const projectSelectionIndices: number[] = [];
+  for (const { observation, selectionIndex } of candidates) {
+    const verdict = verdictByEventId.get(observation.eventId);
+    if (!verdict) {
+      excluded.push({ selectionIndex, reason: "no_canonical_verdict" });
+      continue;
+    }
+    projectInputs.push({ observation, verdict });
+    projectSelectionIndices.push(selectionIndex);
   }
 
   const projected = projectPublicEvidence({ records: projectInputs });
@@ -208,8 +229,8 @@ export function exportLocalPublicEvidence(
     createdDayUtc: preview.bundle.createdDayUtc,
     configDir,
   });
-  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
   const stored = storePublicEvidenceBundle(bundle, configDir);
+  recordLocalPublicOrigin({ publisherKeyId: bundle.publisher.keyId, bundleId: bundle.bundleId }, configDir);
   return {
     bundle,
     stored: { path: PRIVATE_STORAGE_LOCATOR, created: stored.created },
