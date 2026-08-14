@@ -128,12 +128,18 @@ test("V1 revocation rejects targets that span multiple bundle anchors", () => {
   })).toThrow();
 });
 
-test("export purge fails closed when POSIX export-directory durability cannot be established", () => {
+test("export purge keeps failing closed on retry until POSIX deletion durability is established", () => {
   if (process.platform === "win32") return;
   const home = configDir("ocx-cl10-export-delete-durability-");
   const own = bundle(home);
   writePublicEvidenceBundle(own, home);
 
-  setPublicEvidencePurgeFaultForTests("export_directory_sync" as any);
+  setPublicEvidencePurgeFaultForTests("export_directory_sync");
   expect(() => purgeLocalPublicEvidenceCopies(home)).toThrow(/directory|sync|durab/i);
+  // The first attempt already removed the export pathname. A retry must still
+  // fsync the now-empty directory rather than reporting success without durability.
+  expect(() => purgeLocalPublicEvidenceCopies(home)).toThrow(/directory|sync|durab/i);
+
+  setPublicEvidencePurgeFaultForTests(null);
+  expect(() => purgeLocalPublicEvidenceCopies(home)).not.toThrow();
 });
