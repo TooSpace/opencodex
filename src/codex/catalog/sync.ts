@@ -67,6 +67,12 @@ import { accountBoundNativeDisplayName, CODEX_ACCOUNT_BOUND_CATALOG_KIND, truste
 
 export const MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5;
 
+// Priority tier for config.modelPickerOrder rows (#1649). Sits in the same high neighborhood
+// account-selector rows already use (1_000+), i.e. well above the featured band (0..N-1) and the
+// default routed/native tiers, so reordering here only affects the picker tail and never the
+// spawn_agent candidate window (the first MAX_SPAWN_AGENT_MODEL_OVERRIDES rows by priority).
+export const PICKER_ORDER_PRIORITY_BASE = 1_000;
+
 export type SpawnAgentSurface = "v1" | "v2";
 
 export type SubagentRosterExclusionReason =
@@ -443,20 +449,26 @@ export function buildCatalogEntriesFromObservedState({
   const pickerOrder = (modelPickerOrder ?? []).filter(id => typeof id === "string" && id.length > 0);
   const pickerOrderRank = new Map(pickerOrder.map((slug, i) => [slug, i] as const));
   const pickerOrderActive = pickerOrder.length > 0;
-  // Band base sits just past the featured band so listed rows sort right after featured ones.
-  const pickerOrderBase = (featured?.length ?? 0) * priorityStride + 1;
-  let nonFeaturedFallbackSeq = 0;
+  // The picker-order band reuses the existing high priority tier (>= PICKER_ORDER_PRIORITY_BASE,
+  // same 1_000+ neighborhood that account rows already occupy). Featured rows keep the 0..N-1
+  // front band, and any default routed/native rows keep their low priorities, so the
+  // spawn_agent candidate window (the first MAX_SPAWN_AGENT_MODEL_OVERRIDES rows by ascending
+  // priority; see effectiveSubagentRoster) is populated by featured + default rows first and is
+  // NOT reordered by modelPickerOrder. modelPickerOrder only reorders rows within this high band,
+  // i.e. the picker tail below the candidate window.
   /**
-   * Priority for a non-featured routed row when modelPickerOrder is active. Listed slugs sort in
-   * declared order right after featured; unlisted rows keep their mutual order but sit after every
-   * listed one. Returns undefined when the feature is off, so the caller's original assignment
-   * (default 5 / account 1_000+) is preserved untouched.
+   * Priority for a non-featured routed row that is explicitly LISTED in modelPickerOrder. Listed
+   * slugs sort in declared order within the high picker-order tier (>= PICKER_ORDER_PRIORITY_BASE),
+   * which sits above the featured band and the default routed tier, so it reorders the picker tail
+   * without entering the spawn_agent candidate window. Returns undefined when the feature is off or
+   * the row is not listed, so those rows keep their original assignment (default 5 / account
+   * 1_000+) untouched.
    */
   const pickerOrderPriority = (slug: string, altSlug?: string): number | undefined => {
     if (!pickerOrderActive) return undefined;
     const hit = pickerOrderRank.get(slug) ?? (altSlug !== undefined ? pickerOrderRank.get(altSlug) : undefined);
-    if (hit !== undefined) return pickerOrderBase + hit * priorityStride;
-    return pickerOrderBase + (pickerOrder.length + nonFeaturedFallbackSeq++) * priorityStride;
+    if (hit === undefined) return undefined;
+    return PICKER_ORDER_PRIORITY_BASE + hit * priorityStride;
   };
   const out: RawEntry[] = [];
   const nativeEntries: RawEntry[] = [];
@@ -562,10 +574,12 @@ export function buildCatalogEntriesFromObservedState({
     }
     // Featured picks may be stored raw (legacy) or encoded — honor both.
     const rankHit = rank.get(slug) ?? rank.get(`${m.provider}/${m.id}`);
+    const pickerPriority = rankHit === undefined ? pickerOrderPriority(slug, `${m.provider}/${m.id}`) : undefined;
     if (rankHit !== undefined) e.priority = rankHit * priorityStride;
-    else if (pickerOrderActive) {
-      // #1649: modelPickerOrder assigns the full non-featured order deterministically.
-      e.priority = pickerOrderPriority(slug, `${m.provider}/${m.id}`)!;
+    else if (pickerPriority !== undefined) {
+      // #1649: rows explicitly listed in modelPickerOrder get the high picker-order tier so they
+      // reorder the picker tail without displacing default-tier spawn_agent candidates.
+      e.priority = pickerPriority;
     }
     else if (accountSelectors.length > 0) {
       // Keep the generated account rows together in Codex's priority-sorted flat picker.

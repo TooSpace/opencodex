@@ -641,11 +641,14 @@ export interface OcxConfig {
    * Optional full picker ordering for the Codex model catalog, independent of the
    * 5-slot `subagentModels` spawn_agent cap. Values are catalog ids in the same forms
    * accepted by `subagentModels` (bare native ids, account-qualified, or routed
-   * `<provider>/<model>` slugs). Entries listed here are ordered first (after any
-   * `subagentModels`-featured rows, which keep their existing top priority), in array
-   * order; every catalog row not listed keeps its normal relative order but sorts after
-   * the listed ones. When unset or empty, catalog priority is unchanged. This only
-   * affects picker display order; it does not widen the spawn_agent candidate set.
+   * `<provider>/<model>` slugs). Listed routed rows are ordered among themselves in array
+   * order, in a reserved high priority tier that sits below the spawn_agent candidate
+   * window; rows not listed keep their normal priority and are not reordered. Intended for
+   * pinning a full multi-provider catalog: list every routed model you want ordered.
+   * `subagentModels`-featured rows keep their existing top priority and win regardless.
+   * When unset or empty, catalog priority is unchanged. This affects picker display order
+   * only; it does not widen the spawn_agent candidate set or change which rows are
+   * spawn_agent candidates.
    */
   modelPickerOrder?: string[];
   /**
