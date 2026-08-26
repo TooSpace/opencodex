@@ -21,6 +21,7 @@ import { isModelTextOnly } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
+  fetchWithTransientRetry,
   prepareSameTarget429Wait,
   type UpstreamSendRecovery,
 } from "../lib/upstream-retry";
@@ -33,6 +34,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { fastPolicyForModel } from "../providers/service-tier";
 import type { RouteResult } from "../router";
@@ -204,7 +206,9 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
 
   const send = async (request: AdapterRequest, recovery?: "rate-limit-429" | "key-429"): Promise<Response> => {
     try {
-      return await fetchWithResetRetry(
+      const transientPolicy = transientRetryPolicyFor(activeProvider);
+      const doFetchWithRetry = transientPolicy ? fetchWithTransientRetry : fetchWithResetRetry;
+      return await doFetchWithRetry(
         (transportRecovery?: UpstreamSendRecovery) => {
           noteAttemptSend(attempt, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
           return fetchWithHeaderTimeout(
@@ -223,7 +227,11 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
             }),
           );
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(request.url) },
+        {
+          abortSignal: upstream.signal,
+          label: safeHostLabel(request.url),
+          ...(transientPolicy ? { attempts: transientPolicy.attempts } : {}),
+        },
       );
     } finally {
       request.releaseBodyObservation?.();

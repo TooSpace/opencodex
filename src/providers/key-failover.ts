@@ -9,7 +9,7 @@
  * Modelled after src/codex/routing.ts cooldown logic but scoped to plain API-key pools.
  */
 import { saveConfigPreservingClaudeCode } from "../config";
-import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy } from "../types";
+import type { OcxConfig, OcxProviderConfig, RateLimitRetryPolicy, TransientRetryPolicy } from "../types";
 import { resolveProviderTransport, type OcxProviderTransport } from "./xai-transport";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 
@@ -33,6 +33,37 @@ const DEFAULT_RATE_LIMIT_RETRY = {
   maxIntervalMs: 60_000,
   respectRetryAfter: true,
 } as const satisfies Required<RateLimitRetryPolicy>;
+
+/**
+ * Default transient-5xx retry policy used when a provider opts in via a bare
+ * `transientRetryOn5xx: {}` (presence = opt-in with these defaults).
+ */
+const DEFAULT_TRANSIENT_RETRY = {
+  enabled: true,
+  attempts: 3,
+  baseDelayMs: 400,
+  maxDelayMs: 5_000,
+} as const satisfies Required<TransientRetryPolicy>;
+
+/**
+ * Normalize a provider's `transientRetryOn5xx` policy, or return null when the knob is absent,
+ * explicitly disabled, or the provider is not key-auth. OAuth/forward credentials are
+ * never replayed on the same token, and local runtimes have no remote key to preserve.
+ * The returned policy is fully defaulted so callers never re-check fields.
+ */
+export function transientRetryPolicyFor(
+  provider: Pick<OcxProviderConfig, "transientRetryOn5xx" | "authMode">,
+): Required<TransientRetryPolicy> | null {
+  const policy = provider.transientRetryOn5xx;
+  if (!policy || policy.enabled === false) return null;
+  if (provider.authMode !== undefined && provider.authMode !== "key") return null;
+  return {
+    enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
+    attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
+    baseDelayMs: policy.baseDelayMs ?? DEFAULT_TRANSIENT_RETRY.baseDelayMs,
+    maxDelayMs: policy.maxDelayMs ?? DEFAULT_TRANSIENT_RETRY.maxDelayMs,
+  };
+}
 
 /** Map<`${providerName}\0${keyId}`, KeyCooldown> */
 const keyCooldowns = new Map<string, KeyCooldown>();

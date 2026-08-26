@@ -52,6 +52,24 @@ export interface RateLimitRetryPolicy {
 }
 
 /**
+ * Transient-5xx retry policy (providers.<name>.transientRetryOn5xx). When present and not
+ * explicitly disabled, the proxy retries the initial request with exponential backoff on
+ * transient upstream statuses (500/502/503/504/520/521/522) before surfacing the error.
+ * All fields optional; the runtime applies defaults (attempts=3, baseDelayMs=400,
+ * maxDelayMs=5000, enabled=true). Only honored for key-auth providers.
+ */
+export interface TransientRetryPolicy {
+  /** Master switch. The presence of the object also enables the policy (default true). */
+  enabled?: boolean;
+  /** Extra retry attempts after the first transient failure (1..10, default 3). */
+  attempts?: number;
+  /** Base delay in ms for the first retry backoff (default 400). */
+  baseDelayMs?: number;
+  /** Cap for any single retry wait, including an upstream Retry-After (default 5000). */
+  maxDelayMs?: number;
+}
+
+/**
  * User-configured display price for one model (USD per 1M tokens).
  * Mirrors the `Cost4` shape used by the usage cost estimator; structurally
  * compatible so config rows can be lifted directly into price overlays.
@@ -537,6 +555,15 @@ export interface OcxProviderConfig {
    * before any response bytes are relayed, so the replay is lossless.
    */
   retryOn429?: RateLimitRetryPolicy;
+  /**
+   * Opt-in transient-5xx retry policy. When present, the proxy retries the initial
+   * request with exponential backoff on transient upstream statuses (500/502/503/504/520/521/522)
+   * before surfacing the error. Pre-stream only: a transient error arrives before any
+   * response bytes are relayed, so the replay is lossless. This extends the same protection
+   * that the Google adapter already receives via fetchWithTransientRetry to any key-auth
+   * provider that opts in. Disabled by default.
+   */
+  transientRetryOn5xx?: TransientRetryPolicy;
   /**
    * Model ids whose OpenAI-compatible chat endpoint accepts `reasoning_split: true` and returns
    * thinking separately in `reasoning_content` / `reasoning_details` instead of visible content.

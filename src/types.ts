@@ -90,6 +90,7 @@ export type {
   OpenRouterProviderRouting,
   ResponsesItemIdRepairConfig,
   RateLimitRetryPolicy,
+  TransientRetryPolicy,
   ProviderCostOverlay,
   RequestPacingRule,
   ProviderRequestPacingConfig,

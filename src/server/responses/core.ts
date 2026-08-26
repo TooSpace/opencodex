@@ -218,6 +218,7 @@ import {
   rateLimitRetryDelayMs,
   rateLimitRetryPolicyFor,
   rotateProviderTransportOn429,
+  transientRetryPolicyFor,
 } from "../../providers/key-failover";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
@@ -5278,11 +5279,12 @@ async function handleResponsesInner(
         }),
       });
     } else {
-      // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
-      // direct Google AI Studio only (Vertex/Antigravity use fetchResponse above). Other
-      // adapters keep reset-only retry so combo failover still hops on the first 5xx
+      // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in via
+      // provider config (transientRetryOn5xx) or the legacy Google adapter exception.
+      // Other adapters keep reset-only retry so combo failover still hops on the first 5xx
       // instead of burning ~1.2s of same-target retries per hop.
-      const fetchWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
+      const transientPolicy = transientRetryPolicyFor(route.provider);
+      const fetchWithRetryPolicy = transientPolicy || route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           noteAttemptSend(logCtx.activeAttempt, inputTokenEstimate, recovery);
@@ -5296,7 +5298,11 @@ async function handleResponsesInner(
               modelId: route.modelId,
             }));
         },
-        { abortSignal: upstream.signal, label: safeHostLabel(builtInitialRequest.url) },
+        {
+          abortSignal: upstream.signal,
+          label: safeHostLabel(builtInitialRequest.url),
+          ...(transientPolicy ? { attempts: transientPolicy.attempts } : {}),
+        },
       );
     }
   } catch (err) {
@@ -5797,9 +5803,10 @@ async function handleResponsesInner(
             }),
           });
         }
-        // Same #1851 scope guard as the initial send: transient-5xx retry only for direct
-        // Google AI Studio; every other adapter keeps reset-only semantics here.
-        const fetchContinuationWithRetryPolicy = route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
+        // Same #1851 scope guard as the initial send: transient-5xx retry via
+        // provider config (transientRetryOn5xx) or the legacy Google adapter exception.
+        const transientPolicy = transientRetryPolicyFor(route.provider);
+        const fetchContinuationWithRetryPolicy = transientPolicy || route.provider.adapter === "google" ? fetchWithTransientRetry : fetchWithResetRetry;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
             noteAttemptSend(logCtx.activeAttempt, continuationEstimate, recovery ?? replayKind);
@@ -5819,8 +5826,12 @@ async function handleResponsesInner(
               }),
             );
           },
-          { abortSignal: upstream.signal, label: safeHostLabel(builtContinuationRequest.url) },
-          );
+          {
+            abortSignal: upstream.signal,
+            label: safeHostLabel(builtContinuationRequest.url),
+            ...(transientPolicy ? { attempts: transientPolicy.attempts } : {}),
+          },
+        );
       } finally {
         builtContinuationRequest.releaseBodyObservation?.();
       }
