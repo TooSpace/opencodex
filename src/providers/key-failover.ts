@@ -41,8 +41,6 @@ const DEFAULT_RATE_LIMIT_RETRY = {
 const DEFAULT_TRANSIENT_RETRY = {
   enabled: true,
   attempts: 3,
-  baseDelayMs: 400,
-  maxDelayMs: 5_000,
 } as const satisfies Required<TransientRetryPolicy>;
 
 /**
@@ -60,8 +58,6 @@ export function transientRetryPolicyFor(
   return {
     enabled: policy.enabled ?? DEFAULT_TRANSIENT_RETRY.enabled,
     attempts: policy.attempts ?? DEFAULT_TRANSIENT_RETRY.attempts,
-    baseDelayMs: policy.baseDelayMs ?? DEFAULT_TRANSIENT_RETRY.baseDelayMs,
-    maxDelayMs: policy.maxDelayMs ?? DEFAULT_TRANSIENT_RETRY.maxDelayMs,
   };
 }
 

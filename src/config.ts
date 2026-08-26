@@ -445,6 +445,18 @@ const retryOn429PolicySchema = z.object({
   respectRetryAfter: z.boolean().optional(),
 }).strict();
 
+/**
+ * Bounds for the opt-in transient-5xx retry policy. Delays intentionally stay
+ * non-configurable in the first version: the runtime uses the shared safe
+ * constants in lib/upstream-retry.ts (400ms base, 5s cap, Retry-After honored).
+ * Strict, so an unknown key is rejected at every validation boundary instead of
+ * being silently ignored.
+ */
+const transientRetryOn5xxPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  attempts: z.number().int().min(1).max(10).optional(),
+}).strict();
+
 const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
@@ -517,6 +529,7 @@ const providerConfigSchema = z.object({
     .transform(normalizeNonBlankStringArray)
     .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
+  transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
@@ -1392,6 +1405,59 @@ function sanitizeRetryOn429ForLoad(parsed: unknown): void {
 }
 
 /**
+ * Load-time degradation for `transientRetryOn5xx` (loadConfig only), mirroring
+ * {@link sanitizeRetryOn429ForLoad}: one hand-edited invalid optional field must not
+ * trip the whole provider schema. Invalid fields are dropped with a warning; an
+ * explicitly present but invalid master switch drops the whole policy so a malformed
+ * disable-oriented edit stays disabled.
+ */
+function sanitizeTransientRetryOn5xxForLoad(parsed: unknown): void {
+  if (!parsed || typeof parsed !== "object") return;
+  const root = parsed as Record<string, unknown>;
+  const providers = root.providers;
+  if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
+  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+    const safeProviderName = JSON.stringify(redactSecretString(name));
+    if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
+    const p = provider as Record<string, unknown>;
+    const policy = p.transientRetryOn5xx;
+    if (policy === undefined) continue;
+    if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+      delete p.transientRetryOn5xx;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.transientRetryOn5xx (${typeof policy}) is invalid — ignoring the policy`);
+      continue;
+    }
+    const policyRecord = policy as Record<string, unknown>;
+    if ("enabled" in policyRecord && typeof policyRecord.enabled !== "boolean") {
+      delete p.transientRetryOn5xx;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.transientRetryOn5xx.enabled (${typeof policyRecord.enabled}) is invalid — ignoring the whole policy`);
+      continue;
+    }
+    const policyShape = transientRetryOn5xxPolicySchema.shape;
+    const hadPolicyEntries = Object.keys(policyRecord).length > 0;
+    const cleaned: Record<string, unknown> = {};
+    for (const [key, fieldSchema] of Object.entries(policyShape)) {
+      const value = policyRecord[key];
+      if (value === undefined) continue;
+      if (fieldSchema.safeParse(value).success) cleaned[key] = value;
+      else console.warn(`⚠️  config.json providers.${safeProviderName}.transientRetryOn5xx.${key} (${typeof value}) is invalid — ignoring the field`);
+    }
+    const knownKeys = new Set(Object.keys(policyShape));
+    for (const key of Object.keys(policyRecord)) {
+      if (!knownKeys.has(key)) {
+        console.warn(`⚠️  config.json providers.${safeProviderName}.transientRetryOn5xx.${JSON.stringify(redactSecretString(key))} is not a recognized field — ignoring it`);
+      }
+    }
+    if (hadPolicyEntries && Object.keys(cleaned).length === 0) {
+      delete p.transientRetryOn5xx;
+      console.warn(`⚠️  config.json providers.${safeProviderName}.transientRetryOn5xx has no valid fields left — removing the policy (an empty policy would enable retries with defaults)`);
+    } else {
+      p.transientRetryOn5xx = cleaned;
+    }
+  }
+}
+
+/**
  * Management write-boundary validation for `retryOn429` (fail closed). Unlike the
  * lenient load-time sanitizer, invalid values and unknown keys are rejected outright so
  * a POST/PATCH cannot persist a policy the proxy would then silently degrade. Reuses the
@@ -1411,6 +1477,26 @@ export function retryOn429PolicyConfigError(policy: unknown): string | null {
   if (first.path.length === 0) return `retryOn429 is invalid (${first.message})`;
   const field = String(first.path[first.path.length - 1]);
   return `retryOn429.${field} is invalid (${first.message})`;
+}
+
+/**
+ * Management write-boundary validation for `transientRetryOn5xx` (fail closed),
+ * mirroring {@link retryOn429PolicyConfigError}. Reuses the shared policy schema.
+ * Never echoes values, and secret-shaped unknown field names are redacted.
+ */
+export function transientRetryOn5xxPolicyConfigError(policy: unknown): string | null {
+  if (policy === undefined) return null;
+  const result = transientRetryOn5xxPolicySchema.safeParse(policy);
+  if (result.success) return null;
+  const first = result.error.issues[0];
+  if (!first) return "transientRetryOn5xx is invalid";
+  if (first.code === "unrecognized_keys") {
+    const names = first.keys.map(key => JSON.stringify(redactSecretString(key))).join(", ");
+    return `transientRetryOn5xx has unrecognized field${first.keys.length > 1 ? "s" : ""}: ${names}`;
+  }
+  if (first.path.length === 0) return `transientRetryOn5xx is invalid (${first.message})`;
+  const field = String(first.path[first.path.length - 1]);
+  return `transientRetryOn5xx.${field} is invalid (${first.message})`;
 }
 
 /**
@@ -1816,6 +1902,7 @@ export function loadConfig(): OcxConfig {
     const parsed = JSON.parse(raw);
     sanitizeAliasesForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeTransientRetryOn5xxForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -2199,6 +2286,7 @@ function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
     sanitizeRetryOn429ForLoad(parsed);
+    sanitizeTransientRetryOn5xxForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
     if (result.success) {

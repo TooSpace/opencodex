@@ -55,18 +55,15 @@ export interface RateLimitRetryPolicy {
  * Transient-5xx retry policy (providers.<name>.transientRetryOn5xx). When present and not
  * explicitly disabled, the proxy retries the initial request with exponential backoff on
  * transient upstream statuses (500/502/503/504/520/521/522) before surfacing the error.
- * All fields optional; the runtime applies defaults (attempts=3, baseDelayMs=400,
- * maxDelayMs=5000, enabled=true). Only honored for key-auth providers.
+ * All fields optional; the runtime applies the shared defaults (attempts=3,
+ * enabled=true) with the fixed backoff constants in lib/upstream-retry.ts
+ * (400ms base, 5s cap, Retry-After honored). Only honored for key-auth providers.
  */
 export interface TransientRetryPolicy {
   /** Master switch. The presence of the object also enables the policy (default true). */
   enabled?: boolean;
   /** Extra retry attempts after the first transient failure (1..10, default 3). */
   attempts?: number;
-  /** Base delay in ms for the first retry backoff (default 400). */
-  baseDelayMs?: number;
-  /** Cap for any single retry wait, including an upstream Retry-After (default 5000). */
-  maxDelayMs?: number;
 }
 
 /**
