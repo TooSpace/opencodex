@@ -221,6 +221,14 @@ default and leaves the target's own behavior unchanged. Supported values are `lo
 `high`, `xhigh`, `max`, and `ultra`; omit the field or set it to `null` to leave effort entirely to
 the caller and target.
 
+By default, the combo picker intersects every known target effort ladder. Set
+`reasoningEffortMode: "adaptive"` only for a mixed-capability group where targets with an
+explicit empty ladder should remain eligible without suppressing the picker for siblings. In this
+mode, empty ladders are excluded from the published intersection; OpenCodex still resolves each
+selected target separately and omits the effort for targets that do not support it. Unknown
+ladders remain wildcards in both modes. This changes picker metadata only, not target order or
+failover policy.
+
 ## Image / multimodal capability
 
 By default a combo publishes the **intersection** of its targets' input modalities (image is
@@ -314,6 +322,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
       "strategy": "round-robin",
       "stickyLimit": 2,
       "defaultEffort": "high",
+      "reasoningEffortMode": "adaptive",
       "alias": "team/balanced"
     }
   }
@@ -327,6 +336,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `strategy` | No | `"failover"` | `"failover"` or `"round-robin"`. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; applied only when the caller omits effort and the target advertises support. |
+| `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target effort ladder. `"adaptive"` excludes explicit empty ladders from the published picker intersection while preserving per-target effort omission at request time. |
 | `imageInput` | No | `"auto"` | `"auto"` or `"disabled"`. `"auto"` publishes image support only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias` | No | none | Optional trimmed public model id; use the alias rules above. An empty value is stored as no alias. |
 | `nativeAlias` | No | `false` | Explicitly permit a currently supported bare native `alias` to take routing and catalog precedence. Never inferred from the alias. |

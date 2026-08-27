@@ -3,6 +3,7 @@ import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
 import type {
   OcxComboConfig,
   OcxComboDefaultEffort,
+  OcxComboReasoningEffortMode,
   OcxComboStrategy,
   OcxComboTarget,
   OcxConfig,
@@ -37,6 +38,7 @@ export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
   defaultEffort: OcxComboDefaultEffort | null;
+  reasoningEffortMode: OcxComboReasoningEffortMode;
   /** Disable image input; `auto` preserves the intersection derived from all targets. */
   imageInput: "auto" | "disabled";
   /** Trimmed public alias, or null when the combo keeps the default `combo/<id>` slug. */
@@ -232,6 +234,11 @@ export function comboConfigIssues(
       message: "defaultEffort must be one of: low, medium, high, xhigh, max, ultra",
     });
   }
+  if (body.reasoningEffortMode !== undefined
+    && body.reasoningEffortMode !== "strict"
+    && body.reasoningEffortMode !== "adaptive") {
+    issues.push({ path: ["reasoningEffortMode"], message: 'reasoningEffortMode must be "strict" or "adaptive"' });
+  }
   if (body.imageInput !== undefined && body.imageInput !== "auto" && body.imageInput !== "disabled") {
     issues.push({ path: ["imageInput"], message: 'imageInput must be "auto" or "disabled"' });
   }
@@ -354,6 +361,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     strategy: raw.strategy ?? "failover",
     stickyLimit: raw.stickyLimit ?? 1,
     defaultEffort: raw.defaultEffort ?? null,
+    reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
     imageInput: raw.imageInput === "disabled" ? "disabled" : "auto",
     alias: alias || null,
     nativeAlias: raw.nativeAlias === true,

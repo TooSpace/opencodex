@@ -654,6 +654,11 @@ export function providerManagementConfigError(name: unknown, provider: unknown):
     "noStructuredOutputModels",
   );
   if (structuredOutputOptOutError) return `provider ${name} ${structuredOutputOptOutError}`;
+  const toolReasoningOptOutError = nonBlankStringArrayConfigError(
+    raw.omitReasoningEffortWithToolsModels,
+    "omitReasoningEffortWithToolsModels",
+  );
+  if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   if (typed.authMode === "local") {
@@ -739,6 +744,7 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       "reasoningWireFormat",
       "noVisionModels",
       "noReasoningModels",
+      "omitReasoningEffortWithToolsModels",
       "noTemperatureModels",
       "noTopPModels",
       "noPenaltyModels",

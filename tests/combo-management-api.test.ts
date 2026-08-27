@@ -254,13 +254,13 @@ describe("combo management API", () => {
         success: true,
         id: "zeta",
         model: "combo/zeta",
-        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: null },
+        combo: { strategy: "failover", stickyLimit: 1, defaultEffort: null, reasoningEffortMode: "strict" },
       });
       const updated = await comboApi(config, "PUT", "/api/combos", {
         id: "zeta",
-        combo: { strategy: "round-robin", stickyLimit: 2, defaultEffort: "high", targets: [{ provider: "b", model: "m2", weight: 3 }] },
+        combo: { strategy: "round-robin", stickyLimit: 2, defaultEffort: "high", reasoningEffortMode: "adaptive", targets: [{ provider: "b", model: "m2", weight: 3 }] },
       });
-      expect((await responseJson(updated)).combo).toMatchObject({ strategy: "round-robin", stickyLimit: 2, defaultEffort: "high" });
+      expect((await responseJson(updated)).combo).toMatchObject({ strategy: "round-robin", stickyLimit: 2, defaultEffort: "high", reasoningEffortMode: "adaptive" });
       await comboApi(config, "PUT", "/api/combos", {
         id: "alpha",
         combo: { targets: [{ provider: "a", model: "m1" }] },

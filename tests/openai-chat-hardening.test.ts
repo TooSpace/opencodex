@@ -111,6 +111,41 @@ function routedProvider(name: "litellm" | "ollama", apiKey?: string): OcxProvide
 }
 
 describe("openai-chat request hardening", () => {
+  test("omits reasoning effort only for configured tool-bearing model requests", () => {
+    const configured = provider({
+      modelReasoningEfforts: { "tool-sensitive": ["low", "high"] },
+      omitReasoningEffortWithToolsModels: ["tool-sensitive"],
+    });
+    const withTools = createOpenAIChatAdapter(configured).buildRequest({
+      ...parsed(),
+      modelId: "tool-sensitive",
+      options: { reasoning: "high" },
+      context: {
+        messages: [{ role: "user", content: "hi", timestamp: 0 }],
+        tools: [{ name: "probe", description: "probe", parameters: { type: "object" } }],
+      },
+    });
+    expect(JSON.parse(withTools.body)).not.toHaveProperty("reasoning_effort");
+
+    const withoutTools = createOpenAIChatAdapter(configured).buildRequest({
+      ...parsed(),
+      modelId: "tool-sensitive",
+      options: { reasoning: "high" },
+    });
+    expect(JSON.parse(withoutTools.body)).toMatchObject({ reasoning_effort: "high" });
+
+    const sibling = createOpenAIChatAdapter(configured).buildRequest({
+      ...parsed(),
+      modelId: "ordinary",
+      options: { reasoning: "high" },
+      context: {
+        messages: [{ role: "user", content: "hi", timestamp: 0 }],
+        tools: [{ name: "probe", description: "probe", parameters: { type: "object" } }],
+      },
+    });
+    expect(JSON.parse(sibling.body)).toMatchObject({ reasoning_effort: "high" });
+  });
+
   test("strips Responses-only encrypted annotations without changing schema names or literal values", () => {
     const parameters = {
       type: "object",

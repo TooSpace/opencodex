@@ -595,6 +595,7 @@ describe("combo validation and normalization", () => {
       { raw: { ...VALID_COMBO, strategy: "random" }, path: ["strategy"], message: "failover" },
       { raw: { ...VALID_COMBO, stickyLimit: 1.5 }, path: ["stickyLimit"], message: "integer from 1 to 100" },
       { raw: { ...VALID_COMBO, defaultEffort: "turbo" }, path: ["defaultEffort"], message: "low, medium, high" },
+      { raw: { ...VALID_COMBO, reasoningEffortMode: "unsafe" }, path: ["reasoningEffortMode"], message: "strict" },
       { raw: { targets: [] }, path: ["targets"], message: "non-empty array" },
       { raw: { targets: [null] }, path: ["targets", 0], message: "must be an object" },
       { raw: { targets: [{ provider: " ", model: "m1" }] }, path: ["targets", 0, "provider"], message: "is required" },
@@ -644,11 +645,13 @@ describe("combo validation and normalization", () => {
   test("normalizes valid values and returns defensive default efforts", () => {
     expect(normalizeComboConfig({
       defaultEffort: "high",
+      reasoningEffortMode: "strict",
       targets: [{ provider: " a ", model: " m1 ", weight: 2 }],
     })).toEqual({
       strategy: "failover",
       stickyLimit: 1,
       defaultEffort: "high",
+      reasoningEffortMode: "strict",
       imageInput: "auto",
       alias: null,
       nativeAlias: false,
@@ -656,6 +659,7 @@ describe("combo validation and normalization", () => {
       targets: [{ provider: "a", model: "m1", weight: 2 }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }], reasoningEffortMode: "adaptive" }).reasoningEffortMode).toBe("adaptive");
     expect(comboDefaultEffort(baseConfig(), "free")).toBeNull();
     const aliased = baseConfig({
       combos: { free: { ...VALID_COMBO, alias: "  deepseek-v4-flash  " } },

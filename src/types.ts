@@ -66,6 +66,7 @@ export type {
   OcxAccountPoolRotationStrategy,
   OcxComboStrategy,
   OcxComboDefaultEffort,
+  OcxComboReasoningEffortMode,
   OcxComboTarget,
   OcxComboConfig,
   OcxRoutingUnknownEvidenceMode,

@@ -444,6 +444,12 @@ export interface OcxProviderConfig {
    * reasoning_effort for these even when Codex selects a reasoning level (e.g. xAI grok-build-0.1).
    */
   noReasoningModels?: string[];
+  /**
+   * Models that accept caller-selected reasoning on ordinary Chat Completions turns but reject
+   * the tools plus reasoning parameter combination. The adapter keeps the public reasoning
+   * capability and omits only the upstream reasoning field for tool-bearing requests.
+   */
+  omitReasoningEffortWithToolsModels?: string[];
   /** Model ids that reject caller-specified temperature. */
   noTemperatureModels?: string[];
   /** Model ids that reject caller-specified top_p. */

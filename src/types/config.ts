@@ -656,6 +656,8 @@ export type OcxAccountPoolRotationStrategy = "quota" | "round-robin" | "fill-fir
 
 export type OcxComboStrategy = "failover" | "round-robin";
 export type OcxComboDefaultEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+/** How a combo derives its public reasoning picker from mixed target capabilities. */
+export type OcxComboReasoningEffortMode = "strict" | "adaptive";
 
 export interface OcxComboTarget {
   provider: string;
@@ -672,6 +674,11 @@ export interface OcxComboConfig {
   stickyLimit?: number;
   /** Used when the client omits reasoning.effort. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
+  /**
+   * strict (default) intersects every known target ladder. Adaptive ignores explicit empty
+   * ladders while deriving the public picker; concrete targets still own wire compatibility.
+   */
+  reasoningEffortMode?: OcxComboReasoningEffortMode;
   /**
    * Disable image input even when every target supports it.
    * Omitted / `"auto"` keeps automatic capability derivation (default: enabled when

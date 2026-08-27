@@ -107,6 +107,7 @@ differing backup and rewrites known legacy namespaced selected ids to bare ids.
 | `modelReasoningEffortMap?` | `Record<string, Record<string, string>>` | Per-model wire aliases for reasoning labels. |
 | `reasoningWireFormat?` | `"gateway-object"` | For OpenAI-compatible gateways that accept `reasoning: { enabled, effort }` instead of `reasoning_effort`. The ClinePass preset sets this automatically. |
 | `noReasoningModels?` | `string[]` | Models that reject reasoning/thinking parameters. |
+| `omitReasoningEffortWithToolsModels?` | `string[]` | Exact `openai-chat` model IDs that accept reasoning effort on ordinary turns but reject it when function tools are present. The model may still advertise its configured effort ladder; on a tool-bearing request OpenCodex omits the wire reasoning field and uses the upstream model default. |
 | `noTemperatureModels?` | `string[]` | Models that reject caller-specified `temperature`. |
 | `noTopPModels?` | `string[]` | Models that reject caller-specified `top_p`. |
 | `noPenaltyModels?` | `string[]` | Models that reject presence/frequency penalties. |

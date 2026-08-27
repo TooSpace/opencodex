@@ -1425,10 +1425,16 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       }
       if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
       const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
-      const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+      // Keep a model's picker capability when it only rejects the tools plus reasoning
+      // parameter combination; omit the incompatible wire field for this request only.
+      const omitReasoningEffortWithTools = !!tools
+        && modelInList(provider.omitReasoningEffortWithToolsModels, parsed.modelId);
+      const reasoningEffort = omitReasoningEffortWithTools
+        ? undefined
+        : mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
       const nativeOpenAI = isNativeOpenAIChatTarget(provider);
       let reasoningLog: AdapterRequest["reasoningLog"];
-      if (!reasoningDisabled && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
+      if (!reasoningDisabled && !omitReasoningEffortWithTools && provider.reasoningWireFormat === "gateway-object" && parsed.options.reasoning === "none") {
         if (nativeOpenAI) {
           body.reasoning_effort = "none";
           reasoningLog = {

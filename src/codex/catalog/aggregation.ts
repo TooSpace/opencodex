@@ -137,11 +137,16 @@ export function deriveComboCatalogModel(
     ? derivedInputModalities.filter(modality => modality !== "image")
     : derivedInputModalities;
   if (inputModalities.length === 0) return null;
-  // Unknown ladders (`undefined`) are wildcards for catalog derivation — same
-  // boundary as the GUI picker. An explicit empty ladder still constrains.
-  const advertisedLadders = members
+  // Unknown ladders are wildcards for catalog derivation. Strict mode keeps the legacy rule
+  // that an explicit empty ladder constrains the whole combo. Adaptive mode is opt-in for
+  // mixed-capability failover groups: an empty ladder means this concrete target receives no
+  // effort field, while non-empty ladders still define the picker intersection.
+  const knownLadders = members
     .map(member => member.reasoningEfforts)
     .filter((ladder): ladder is string[] => ladder !== undefined);
+  const advertisedLadders = combo.reasoningEffortMode === "adaptive"
+    ? knownLadders.filter(ladder => ladder.length > 0)
+    : knownLadders;
   const reasoningEfforts = advertisedLadders.length === 0
     ? []
     : intersectStrings(advertisedLadders);

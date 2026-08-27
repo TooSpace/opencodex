@@ -304,6 +304,27 @@ describe("provider management validation", () => {
     expect(dto.providers.relay?.noStructuredOutputModels).toEqual(["deepseek-v4-flash"]);
   });
 
+  test("validates and exposes tool-sensitive reasoning model opt-outs", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example/v1",
+      omitReasoningEffortWithToolsModels: ["tool-sensitive"],
+    };
+    expect(providerManagementConfigError("relay", provider)).toBeNull();
+    for (const omitReasoningEffortWithToolsModels of ["tool-sensitive", [""], ["   "], [42]]) {
+      expect(providerManagementConfigError("relay", {
+        ...provider,
+        omitReasoningEffortWithToolsModels,
+      })).toContain("omitReasoningEffortWithToolsModels");
+    }
+    const dto = safeConfigDTO({
+      port: 10100,
+      defaultProvider: "relay",
+      providers: { relay: provider },
+    } as OcxConfig) as { providers: Record<string, { omitReasoningEffortWithToolsModels?: string[] }> };
+    expect(dto.providers.relay?.omitReasoningEffortWithToolsModels).toEqual(["tool-sensitive"]);
+  });
+
   test("normalizes hand-edited structured-output model opt-outs at load", () => {
     if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
     mkdirSync(TEST_DIR, { recursive: true });
@@ -322,6 +343,26 @@ describe("provider management validation", () => {
 
     expect(loadConfig().providers.relay?.noStructuredOutputModels)
       .toEqual(["deepseek-v4-flash", "other-model"]);
+  });
+
+  test("normalizes hand-edited tool-sensitive reasoning model opt-outs at load", () => {
+    if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true });
+    mkdirSync(TEST_DIR, { recursive: true });
+    process.env.OPENCODEX_HOME = TEST_DIR;
+    writeFileSync(join(TEST_DIR, "config.json"), JSON.stringify({
+      ...config("127.0.0.1"),
+      defaultProvider: "relay",
+      providers: {
+        relay: {
+          adapter: "openai-chat",
+          baseUrl: "https://relay.example/v1",
+          omitReasoningEffortWithToolsModels: [" tool-sensitive ", "tool-sensitive", " sibling "],
+        },
+      },
+    }));
+
+    expect(loadConfig().providers.relay?.omitReasoningEffortWithToolsModels)
+      .toEqual(["tool-sensitive", "sibling"]);
   });
 
   test("provider management rejects modelCosts rows with extra fields", () => {

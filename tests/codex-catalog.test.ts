@@ -261,6 +261,18 @@ describe("combo catalog capability intersection", () => {
     ]);
     expect(empty?.reasoningEfforts).toEqual([]);
     expect(empty).not.toHaveProperty("defaultReasoningEffort");
+
+    const adaptive = deriveComboCatalogModel("adaptive", normalizedCombo({
+      defaultEffort: "medium",
+      reasoningEffortMode: "adaptive",
+    }), [
+      memberA,
+      { ...memberB, reasoningEfforts: [] },
+    ]);
+    expect(adaptive).toEqual(expect.objectContaining({
+      reasoningEfforts: ["low", "medium", "high"],
+      defaultReasoningEffort: "medium",
+    }));
   });
 
   test("fails closed for missing members, unknown context, duplicate targets, and empty modalities", () => {

@@ -76,6 +76,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | `strategy?` | `"failover" \| "round-robin"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape smooth weighted round-robin. |
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | Applied only when the caller omits effort and the selected target advertises the requested rung. |
+| `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"` intersects every known target effort ladder. `"adaptive"` excludes explicit empty ladders from the public picker intersection; dispatch remains per-target and unsupported effort fields are omitted. |
 | `imageInput?` | `"auto" \| "disabled"` | `"auto"` | `"auto"` publishes image only when every target supports images; `"disabled"` forces text-only (drops image from published modalities and rejects image-bearing requests before dispatch). |
 | `alias?` | `string` | — | Optional public model id in place of the canonical picker slug. |
 | `nativeAlias?` | `boolean` | `false` | Let a currently supported bare native id take precedence only for that unqualified id. Bare `gpt-5.6-*` ids use Codex Pool/Direct credentials. Account-qualified routes remain distinct. Provider-qualified routes such as `openai-apikey/gpt-5.6-*` use their configured API-key route and never fall through to the native alias. |
@@ -92,6 +93,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
       ],
       "strategy": "failover",
       "defaultEffort": "high",
+      "reasoningEffortMode": "adaptive",
       "alias": "coding-primary"
     }
   }
